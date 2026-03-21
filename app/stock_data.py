@@ -52,8 +52,6 @@ def fetch_price_history(
 ) -> pd.DataFrame:
     """
     Fetch historical OHLCV data for a ticker via yfinance.
-    curl_cffi (listed in requirements.txt) must be installed so that yfinance
-    can bypass Yahoo Finance's per-IP rate limiting.
     """
     t = _ticker(ticker)
     end_inclusive = end_date + timedelta(days=1)

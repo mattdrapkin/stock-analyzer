@@ -72,7 +72,7 @@ def _format_analysis_as_context(analysis: TickerAnalysis) -> str:
 
 # ── System prompt ─────────────────────────────────────────────────────────────
 
-SYSTEM_PROMPT = """You are StockSage, an expert financial analyst AI assistant.
+SYSTEM_PROMPT = """You are an expert financial analyst AI assistant.
 You have been given structured data about major stock price movements and related news articles for a specific company.
 
 Your job is to:
@@ -159,7 +159,7 @@ def chat_with_ticker(
             model=OPENAI_MODEL,
             messages=messages,
             temperature=0.3,
-            max_tokens=1024,
+            max_completion_tokens=1024,
         )
         response_text = completion.choices[0].message.content or ""
     except OpenAIError as e:
