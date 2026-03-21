@@ -1,7 +1,7 @@
 """
 News fetching module.
 
-Primary source : SerpAPI Google News (https://serpapi.com) — requires SERPAPI_KEY env var.
+Primary source : NewsAPI (https://newsapi.org) — requires NEWSAPI_KEY env var.
 
 News categories
 ---------------
@@ -15,12 +15,12 @@ import logging
 from datetime import date, datetime, timedelta
 from typing import List, Dict, Optional
 
-import serpapi
+from newsapi import NewsApiClient
 from openai import OpenAI, OpenAIError
 
 logger = logging.getLogger(__name__)
 
-SERPAPI_KEY: str = os.getenv("SERPAPI_KEY", "")
+NEWSAPI_KEY: str = os.getenv("NEWSAPI_KEY", "")
 OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-5.4-nano")
 
@@ -32,17 +32,20 @@ DEFAULT_DAYS_AFTER = 1
 # ── Query builders ────────────────────────────────────────────────────────────
 
 def _company_query(company_name: str, ticker: str) -> str:
-    """Narrow query targeting the specific company."""
-    if not company_name or not ticker:
-        logger.warning("Empty company_name or ticker provided for company query")
+    """Simple query targeting the specific company."""
+    if not company_name and not ticker:
+        logger.warning("Empty company_name and ticker provided for company query")
         return ""
-    
-    safe_name = company_name.replace('"', "").strip()
-    if not safe_name:
-        logger.warning("Company name becomes empty after sanitization")
-        return f'"{ticker.upper()}" stock'
-    
-    return f'"{safe_name}" OR "{ticker.upper()}" stock'
+
+    parts = []
+    if company_name:
+        safe_name = company_name.replace('"', "").strip()
+        if safe_name:
+            parts.append(f'"{safe_name}"')
+    if ticker:
+        parts.append(f'"{ticker.upper()}"')
+
+    return " OR ".join(parts) if parts else ""
 
 
 def _competitor_query(sector: Optional[str], industry: Optional[str]) -> str:
@@ -112,57 +115,21 @@ def _llm_competitor_query(
         return _competitor_query(sector, industry)
 
 
-def _llm_macro_query(
-    company_name: str,
-    ticker: str,
-    sector: Optional[str],
-    industry: Optional[str],
-) -> str:
-    """Use GPT to generate a sophisticated macro/economic query tailored to the company's sector."""
-    if not OPENAI_API_KEY:
-        return _macro_query()
+# ── NewsAPI client ────────────────────────────────────────────────────────────
 
-    try:
-        client = OpenAI(api_key=OPENAI_API_KEY)
-        prompt = (
-            f"You are a financial research assistant. Given the company '{company_name}' "
-            f"(ticker: {ticker}), sector: {sector or 'unknown'}, industry: {industry or 'unknown'}, "
-            f"generate a Google News search query string using OR/AND operators that captures "
-            f"the most relevant macroeconomic trends, regulatory changes, and geopolitical factors "
-            f"that would most affect this specific company's stock price. "
-            f"Focus on factors specific to this sector and industry rather than generic macro terms. "
-            f"Return ONLY the raw search query string, no explanation, no surrounding quotes."
-        )
-        response = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.2,
-        )
-        query = response.choices[0].message.content.strip().strip('"')
-        if not query:
-            return _macro_query()
-        logger.debug(f"LLM macro query for {ticker}: {query}")
-        return query
-    except (OpenAIError, Exception) as e:
-        logger.warning(f"LLM macro query failed, falling back to static: {e}")
-        return _macro_query()
-
-
-# ── SerpAPI client ────────────────────────────────────────────────────────────
-
-def _fetch_serpapi(
+def _fetch_newsapi(
     query: str,
     from_date: date,
     to_date: date,
     max_results: int = 10,
 ) -> List[Dict]:
-    """Hit the SerpAPI Google News endpoint and return normalised articles."""
-    if not SERPAPI_KEY:
-        logger.debug("SerpAPI key not configured, returning empty results")
+    """Hit the NewsAPI /everything endpoint and return normalised articles."""
+    if not NEWSAPI_KEY:
+        logger.debug("NewsAPI key not configured, returning empty results")
         return []
 
     if not query.strip():
-        logger.warning("Empty query provided to SerpAPI")
+        logger.warning("Empty query provided to NewsAPI")
         return []
 
     if from_date > to_date:
@@ -173,56 +140,42 @@ def _fetch_serpapi(
         logger.warning(f"Invalid max_results {max_results}, using default 10")
         max_results = 10
 
-    dated_query = f"{query} after:{from_date.isoformat()} before:{to_date.isoformat()}"
-
     try:
-        client = serpapi.Client(api_key=SERPAPI_KEY)
-        results = client.search({
-            "engine": "google_news",
-            "q": dated_query,
-            "hl": "en",
-            "gl": "us",
-        })
-        news_results = results.get("news_results", [])
+        client = NewsApiClient(api_key=NEWSAPI_KEY)
+        response = client.get_everything(
+            q=query,
+            from_param=from_date.isoformat(),
+            to=to_date.isoformat(),
+            language="en",
+            sort_by="relevancy",
+            page_size=min(max_results * 3, 100),
+        )
     except Exception as e:
-        logger.error(f"SerpAPI request failed: {e}")
+        logger.error(f"NewsAPI request failed: {e}")
         return []
 
-    if not isinstance(news_results, list):
-        logger.error("SerpAPI returned non-list news_results")
+    if response.get("status") != "ok":
+        logger.error(f"NewsAPI returned error: {response.get('message', 'unknown')}")
         return []
 
-    logger.debug(f"SerpAPI returned {len(news_results)} results for query: {query[:50]}...")
-
-    from_dt = datetime(from_date.year, from_date.month, from_date.day, 0, 0, 0)
-    to_dt = datetime(to_date.year, to_date.month, to_date.day, 23, 59, 59)
+    raw_articles = response.get("articles", []) or []
+    logger.debug(f"NewsAPI returned {len(raw_articles)} results for query: {query[:50]}...")
 
     articles = []
-    for i, item in enumerate(news_results):
+    for i, item in enumerate(raw_articles):
         try:
             title = item.get("title", "") or ""
-            if not title:
-                logger.debug(f"Skipping article {i} with empty title")
+            if not title or title == "[Removed]":
                 continue
 
             source_obj = item.get("source", {})
-            if not isinstance(source_obj, dict):
-                source_name = "Unknown"
-            else:
-                source_name = source_obj.get("name", "Unknown") or "Unknown"
+            source_name = (source_obj.get("name") or "Unknown") if isinstance(source_obj, dict) else "Unknown"
 
-            url = item.get("link", "") or ""
-            if url and not isinstance(url, str):
-                url = ""
+            url = item.get("url", "") or ""
 
-            published_at = _parse_datetime(item.get("iso_date"))
+            published_at = _parse_datetime(item.get("publishedAt"))
 
-            # Client-side date filtering
-            if published_at and not (from_dt <= published_at <= to_dt):
-                logger.debug(f"Skipping article outside date window: {published_at}")
-                continue
-
-            summary = item.get("snippet", "") or ""
+            summary = item.get("description") or item.get("content") or ""
             if isinstance(summary, str):
                 summary = summary[:600].strip()
             else:
@@ -258,8 +211,8 @@ def _parse_datetime(s: Optional[str]) -> Optional[datetime]:
 
 # ── Public interface ──────────────────────────────────────────────────────────
 
-def has_serpapi_key() -> bool:
-    return bool(SERPAPI_KEY)
+def has_newsapi_key() -> bool:
+    return bool(NEWSAPI_KEY)
 
 
 def fetch_news_for_movement(
@@ -318,20 +271,20 @@ def fetch_news_for_movement(
 
     # ── Company-specific (always on) ─────────────────────────────────────────
     q = _company_query(company_name, ticker)
-    for a in _fetch_serpapi(q, from_date, to_date, max_per_category):
+    for a in _fetch_newsapi(q, from_date, to_date, max_per_category):
         a["category"] = "company"
         all_articles.append(a)
 
     # ── Competitor / industry (medium) ────────────────────────────────────────
     if include_competitors:
         q = _llm_competitor_query(company_name, ticker, sector, industry)
-        for a in _fetch_serpapi(q, from_date, to_date, max_per_category):
+        for a in _fetch_newsapi(q, from_date, to_date, max_per_category):
             a["category"] = "competitor"
             all_articles.append(a)
 
     # ── Macro / political (hard) ──────────────────────────────────────────────
     if include_macro:
-        for a in _fetch_serpapi(_llm_macro_query(company_name, ticker, sector, industry), from_date, to_date, max_per_category):
+        for a in _fetch_newsapi(_macro_query(), from_date, to_date, max_per_category):
             a["category"] = "macro"
             all_articles.append(a)
 
@@ -384,18 +337,18 @@ def fetch_news_for_period(
     all_articles: List[Dict] = []
 
     q = _company_query(company_name, ticker)
-    for a in _fetch_serpapi(q, from_date, to_date, max_per_category):
+    for a in _fetch_newsapi(q, from_date, to_date, max_per_category):
         a["category"] = "company"
         all_articles.append(a)
 
     if include_competitors:
         q = _llm_competitor_query(company_name, ticker, sector, industry)
-        for a in _fetch_serpapi(q, from_date, to_date, max_per_category):
+        for a in _fetch_newsapi(q, from_date, to_date, max_per_category):
             a["category"] = "competitor"
             all_articles.append(a)
 
     if include_macro:
-        for a in _fetch_serpapi(_llm_macro_query(company_name, ticker, sector, industry), from_date, to_date, max_per_category):
+        for a in _fetch_newsapi(_macro_query(), from_date, to_date, max_per_category):
             a["category"] = "macro"
             all_articles.append(a)
 

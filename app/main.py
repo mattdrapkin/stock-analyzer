@@ -23,7 +23,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .models import ChatRequest, ChatResponse, HealthResponse, TickerAnalysis
 from .analyzer import build_analysis
 from .chat import chat_with_ticker, has_openai_key
-from .news_fetcher import has_serpapi_key
+from .news_fetcher import has_newsapi_key
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -41,7 +41,7 @@ app = FastAPI(
     title="Stock Movement Analyzer",
     description=(
         "Explains major stock price movements using relevant news articles. "
-        "Powered by yfinance, SerpAPI, and OpenAI."
+        "Powered by yfinance, NewsAPI, and OpenAI."
     ),
     version="1.0.0",
     docs_url="/docs",
@@ -68,7 +68,7 @@ def health_check() -> HealthResponse:
     """Returns API status and indicates which external keys are configured."""
     return HealthResponse(
         status="ok",
-        serpapi_configured=has_serpapi_key(),
+        newsapi_configured=has_newsapi_key(),
         openai_configured=has_openai_key(),
     )
 
@@ -121,7 +121,7 @@ def get_analysis(
     - `include_competitors=true`             → also includes sector / industry news
     - `include_macro=true`                   → also includes Fed, rates, geopolitics
     
-    **News**: Powered by SerpAPI Google News.
+    **News**: Powered by NewsAPI Google News.
     """
     resolved_end = end_date or date.today()
     resolved_start = start_date or (resolved_end - timedelta(days=90))

@@ -16,7 +16,7 @@ from .stock_data import (
 )
 from .news_fetcher import (
     fetch_news_for_movement,
-    has_serpapi_key,
+    has_newsapi_key,
 )
 
 logger = logging.getLogger(__name__)
@@ -112,10 +112,10 @@ def build_analysis(
     df = fetch_price_history(ticker, start_date, end_date)
     raw_movements = detect_major_movements(df, min_pct=min_movement_pct)
 
-    # 3. News using SerpAPI
-    if not has_serpapi_key():
+    # 3. News key
+    if not has_newsapi_key():
         raise ValueError(
-            "SERPAPI_KEY is required for news analysis. Please set the SERPAPI_KEY environment variable."
+            "NEWSAPI_KEY is required for news analysis. Please set the NEWSAPI_KEY environment variable."
         )
 
     # Track rate limit issues
@@ -164,7 +164,7 @@ def build_analysis(
     if rate_limit_hit:
         news_note = (
             "Warning: Some news articles may be missing. "
-            "Consider reducing the number of categories (competitor/macro) or checking your SerpAPI quota."
+            "Consider reducing the number of categories (competitor/macro) or checking your NewsAPI quota."
         )
 
     result = TickerAnalysis(
@@ -179,7 +179,7 @@ def build_analysis(
         up_movements=up,
         down_movements=len(movements) - up,
         movements=movements,
-        news_source="SerpAPI",
+        news_source="NewsAPI",
         news_note=news_note,
     )
 

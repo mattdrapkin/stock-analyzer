@@ -15,7 +15,7 @@ from openai import OpenAI, OpenAIError
 
 from .models import ChatMessage, ChatResponse, TickerAnalysis
 from .analyzer import build_analysis
-from .news_fetcher import fetch_news_for_period, has_serpapi_key
+from .news_fetcher import has_newsapi_key
 
 logger = logging.getLogger(__name__)
 
@@ -55,15 +55,25 @@ def _format_analysis_as_context(analysis: TickerAnalysis) -> str:
                 f"  |  Volume: {mv.volume:,}"
             )
             if mv.news:
-                lines.append(f"  Related news ({len(mv.news)} articles):")
-                for i, art in enumerate(mv.news, 1):
-                    pub = art.published_at.strftime("%Y-%m-%d") if art.published_at else "?"
-                    lines.append(
-                        f"    {i}. [{art.category.upper()}] ({pub}) {art.title}"
-                        f" — {art.source}"
-                    )
-                    if art.summary:
-                        lines.append(f"       Summary: {art.summary[:300]}")
+                company_news = [a for a in mv.news if a.category.value == "company"]
+                competitor_news = [a for a in mv.news if a.category.value == "competitor"]
+                macro_news = [a for a in mv.news if a.category.value == "macro"]
+
+                def _render_articles(articles, label):
+                    if not articles:
+                        return
+                    lines.append(f"  >> {label} ({len(articles)} articles):")
+                    for i, art in enumerate(articles, 1):
+                        pub = art.published_at.strftime("%Y-%m-%d") if art.published_at else "?"
+                        lines.append(
+                            f"    {i}. ({pub}) {art.title} — {art.source}"
+                        )
+                        if art.summary:
+                            lines.append(f"       Summary: {art.summary[:300]}")
+
+                _render_articles(company_news, "COMPANY-SPECIFIC NEWS")
+                _render_articles(competitor_news, "COMPETITOR / INDUSTRY NEWS")
+                _render_articles(macro_news, "MACRO / GEOPOLITICAL NEWS")
             else:
                 lines.append("  (No news articles found for this movement.)")
 
@@ -75,13 +85,19 @@ def _format_analysis_as_context(analysis: TickerAnalysis) -> str:
 SYSTEM_PROMPT = """You are an expert financial analyst AI assistant.
 You have been given structured data about major stock price movements and related news articles for a specific company.
 
+News articles are grouped into three distinct categories — COMPANY-SPECIFIC, COMPETITOR / INDUSTRY, and MACRO / GEOPOLITICAL.
+
 Your job is to:
 1. Explain WHY the stock moved significantly on specific dates, drawing on the provided news.
-2. Distinguish between company-specific drivers (earnings, product launches, lawsuits), industry/competitor moves, and macro factors (Fed decisions, geopolitics, inflation).
-3. Be intellectually honest — if the available news does not clearly explain a move, say so and suggest what *type* of event could be responsible.
-4. Keep responses concise and well-structured. Use bullet points when listing multiple factors.
-5. When citing news, reference the article title and date naturally in your answer.
-6. Never fabricate news events or financial data.
+2. ALWAYS structure your analysis by news category, in this order:
+   - **Company-Specific**: earnings, product launches, lawsuits, management changes — this is the primary driver to examine first.
+   - **Competitor / Industry**: peer earnings, sector-wide moves, industry trends — discuss separately only if relevant.
+   - **Macro / Geopolitical**: Fed decisions, rates, inflation, trade policy — discuss separately only if relevant.
+3. If a category has no relevant news for a given move, omit it rather than speculating.
+4. Be intellectually honest — if available news does not clearly explain a move, say so and suggest what *type* of event could be responsible.
+5. Keep responses concise and well-structured. Use clear section headers to separate the three news categories when multiple are present.
+6. When citing news, reference the article title and date naturally in your answer.
+7. Never fabricate news events or financial data.
 
 The structured data provided below is your sole source of truth. Do not use outside knowledge about specific events unless asked explicitly.
 """
