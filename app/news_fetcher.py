@@ -16,10 +16,13 @@ from datetime import date, datetime, timedelta
 from typing import List, Dict, Optional
 
 import serpapi
+from openai import OpenAI, OpenAIError
 
 logger = logging.getLogger(__name__)
 
 SERPAPI_KEY: str = os.getenv("SERPAPI_KEY", "")
+OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
+OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-5.4-nano")
 
 # How many days before / after a movement to search for news
 DEFAULT_DAYS_BEFORE = 2
@@ -71,6 +74,78 @@ def _macro_query() -> str:
         "OR trade war OR tariff OR geopolitical OR central bank OR rate hike "
         "OR rate cut OR jobs report OR unemployment"
     )
+
+
+def _llm_competitor_query(
+    company_name: str,
+    ticker: str,
+    sector: Optional[str],
+    industry: Optional[str],
+) -> str:
+    """Use GPT to identify specific public competitors and build a targeted search query."""
+    if not OPENAI_API_KEY:
+        return _competitor_query(sector, industry)
+
+    try:
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        prompt = (
+            f"You are a financial research assistant. Given the company '{company_name}' "
+            f"(ticker: {ticker}), sector: {sector or 'unknown'}, industry: {industry or 'unknown'}, "
+            f"list the 4-5 most direct publicly-traded competitors by company name. "
+            f"Return ONLY a comma-separated list of company names, nothing else. "
+            f"Example format: Apple, Microsoft, Google, Meta"
+        )
+        response = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
+        )
+        competitors_str = response.choices[0].message.content.strip()
+        competitors = [c.strip() for c in competitors_str.split(",") if c.strip()]
+        if not competitors:
+            return _competitor_query(sector, industry)
+        name_parts = " OR ".join(f'"{c}"' for c in competitors[:5])
+        logger.debug(f"LLM competitor query for {ticker}: {name_parts}")
+        return f"({name_parts}) AND (earnings OR merger OR acquisition OR results OR outlook OR stock)"
+    except (OpenAIError, Exception) as e:
+        logger.warning(f"LLM competitor query failed, falling back to static: {e}")
+        return _competitor_query(sector, industry)
+
+
+def _llm_macro_query(
+    company_name: str,
+    ticker: str,
+    sector: Optional[str],
+    industry: Optional[str],
+) -> str:
+    """Use GPT to generate a sophisticated macro/economic query tailored to the company's sector."""
+    if not OPENAI_API_KEY:
+        return _macro_query()
+
+    try:
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        prompt = (
+            f"You are a financial research assistant. Given the company '{company_name}' "
+            f"(ticker: {ticker}), sector: {sector or 'unknown'}, industry: {industry or 'unknown'}, "
+            f"generate a Google News search query string using OR/AND operators that captures "
+            f"the most relevant macroeconomic trends, regulatory changes, and geopolitical factors "
+            f"that would most affect this specific company's stock price. "
+            f"Focus on factors specific to this sector and industry rather than generic macro terms. "
+            f"Return ONLY the raw search query string, no explanation, no surrounding quotes."
+        )
+        response = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+        )
+        query = response.choices[0].message.content.strip().strip('"')
+        if not query:
+            return _macro_query()
+        logger.debug(f"LLM macro query for {ticker}: {query}")
+        return query
+    except (OpenAIError, Exception) as e:
+        logger.warning(f"LLM macro query failed, falling back to static: {e}")
+        return _macro_query()
 
 
 # ── SerpAPI client ────────────────────────────────────────────────────────────
@@ -249,14 +324,14 @@ def fetch_news_for_movement(
 
     # ── Competitor / industry (medium) ────────────────────────────────────────
     if include_competitors:
-        q = _competitor_query(sector, industry)
+        q = _llm_competitor_query(company_name, ticker, sector, industry)
         for a in _fetch_serpapi(q, from_date, to_date, max_per_category):
             a["category"] = "competitor"
             all_articles.append(a)
 
     # ── Macro / political (hard) ──────────────────────────────────────────────
     if include_macro:
-        for a in _fetch_serpapi(_macro_query(), from_date, to_date, max_per_category):
+        for a in _fetch_serpapi(_llm_macro_query(company_name, ticker, sector, industry), from_date, to_date, max_per_category):
             a["category"] = "macro"
             all_articles.append(a)
 
@@ -314,13 +389,13 @@ def fetch_news_for_period(
         all_articles.append(a)
 
     if include_competitors:
-        q = _competitor_query(sector, industry)
+        q = _llm_competitor_query(company_name, ticker, sector, industry)
         for a in _fetch_serpapi(q, from_date, to_date, max_per_category):
             a["category"] = "competitor"
             all_articles.append(a)
 
     if include_macro:
-        for a in _fetch_serpapi(_macro_query(), from_date, to_date, max_per_category):
+        for a in _fetch_serpapi(_llm_macro_query(company_name, ticker, sector, industry), from_date, to_date, max_per_category):
             a["category"] = "macro"
             all_articles.append(a)
 
