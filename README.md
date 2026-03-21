@@ -281,9 +281,6 @@ stock-analyzer/
 │   ├── news_fetcher.py  # NewsAPI client + query builders + LLM competitor detection
 │   ├── analyzer.py      # Orchestration + in-memory cache + rate limit handling
 │   └── chat.py          # OpenAI chat + context builder
-├── tests/
-│   └── test_news_aggregator/
-├── .env.example
 ├── requirements.txt
 ├── test_app.py         # Comprehensive test suite
 └── README.md
