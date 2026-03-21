@@ -7,6 +7,14 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Import the specific yfinance exception
+try:
+    from yfinance.exceptions import YFRateLimitError
+except ImportError:
+    # Fallback for older yfinance versions
+    class YFRateLimitError(Exception):
+        pass
+
 # curl_cffi is auto-detected by yfinance ≥0.2.x when installed — do NOT pass a
 # session= explicitly, as doing so corrupts yfinance's timezone cache and causes
 # AttributeError: 'str' object has no attribute 'name' (yfinance issues #2461, #2470).
@@ -22,12 +30,27 @@ def _ticker(symbol: str) -> yf.Ticker:
     return yf.Ticker(symbol)
 
 
-def _retry(fn, retries: int = 4, base_delay: float = 5.0):
+def _retry(fn, retries: int = 6, base_delay: float = 10.0):
     """Call fn() with exponential backoff on rate-limit responses."""
     last_exc: Exception = RuntimeError("No attempts made")
     for attempt in range(retries):
         try:
             return fn()
+        except YFRateLimitError as e:
+            last_exc = e
+            if attempt < retries - 1:
+                # Exponential backoff with jitter for yfinance rate limits
+                wait = base_delay * (2 ** attempt) + (attempt * 2)
+                logger.warning(
+                    f"yfinance rate limited — retrying in {wait:.0f}s (attempt {attempt + 1}/{retries})"
+                )
+                time.sleep(wait)
+            else:
+                logger.error(f"yfinance rate limit exceeded after {retries} attempts")
+                raise ValueError(
+                    "yfinance rate limit exceeded. Please try again in a few minutes, "
+                    "or consider using a different ticker."
+                )
         except Exception as e:
             last_exc = e
             msg = str(e).lower()
@@ -50,7 +73,10 @@ def fetch_price_history(
 ) -> pd.DataFrame:
     """
     Fetch historical OHLCV data for a ticker via yfinance.
+    Includes enhanced rate limit handling.
     """
+    logger.info(f"Fetching price history for {ticker} from {start_date} to {end_date}")
+    
     t = _ticker(ticker)
     end_inclusive = end_date + timedelta(days=1)
 
@@ -60,13 +86,21 @@ def fetch_price_history(
             end=end_inclusive.isoformat(),
         )
 
-    df = _retry(_fetch)
-    if df.empty:
-        raise ValueError(f"No price data found for ticker '{ticker}'. Check the symbol.")
+    try:
+        df = _retry(_fetch)
+        if df.empty:
+            raise ValueError(f"No price data found for ticker '{ticker}'. Check the symbol.")
 
-    # Remove timezone info for consistent datetime handling
-    df.index = df.index.tz_localize(None)
-    return df
+        # Remove timezone info for consistent datetime handling
+        df.index = df.index.tz_localize(None)
+        logger.info(f"Successfully fetched {len(df)} days of data for {ticker}")
+        return df
+    except ValueError as e:
+        # Re-raise our custom errors
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error fetching price history for {ticker}: {e}")
+        raise ValueError(f"Failed to fetch price data for {ticker}: {str(e)}")
 
 
 def detect_major_movements(
@@ -103,8 +137,9 @@ def detect_major_movements(
 
 
 def get_ticker_info(ticker: str) -> Dict:
-    """Return basic company metadata from yfinance."""
+    """Return basic company metadata from yfinance with rate limit handling."""
     try:
+        logger.debug(f"Fetching ticker info for {ticker}")
         t = _ticker(ticker)
         info = _retry(lambda: t.info)
         return {
@@ -112,6 +147,10 @@ def get_ticker_info(ticker: str) -> Dict:
             "sector": info.get("sector"),
             "industry": info.get("industry"),
         }
+    except ValueError as e:
+        # Re-raise our custom errors
+        logger.warning(f"Could not fetch info for {ticker}: {e}")
+        return {"company_name": ticker, "sector": None, "industry": None}
     except Exception as e:
         logger.warning(f"Could not fetch info for {ticker}: {e}")
         return {"company_name": ticker, "sector": None, "industry": None}

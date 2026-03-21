@@ -144,7 +144,25 @@ def get_analysis(
             cache_ttl=CACHE_TTL,
         )
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        if "rate limit" in str(e).lower():
+            raise HTTPException(
+                status_code=429, 
+                detail={
+                    "error": "Rate limit exceeded",
+                    "message": "yfinance is rate limiting requests. Please try again in a few minutes.",
+                    "retry_after": 300
+                }
+            )
+        elif "newsapi" in str(e).lower():
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "News service unavailable", 
+                    "message": "NewsAPI key is required for news analysis. Please set NEWSAPI_KEY environment variable."
+                }
+            )
+        else:
+            raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.exception(f"Unexpected error building analysis for {ticker}")
         raise HTTPException(status_code=500, detail=f"Internal error: {e}")
@@ -187,7 +205,25 @@ def chat(
             include_macro=body.include_macro,
         )
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        if "rate limit" in str(e).lower():
+            raise HTTPException(
+                status_code=429, 
+                detail={
+                    "error": "Rate limit exceeded",
+                    "message": "yfinance is rate limiting requests. Please try again in a few minutes.",
+                    "retry_after": 300
+                }
+            )
+        elif "newsapi" in str(e).lower():
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "News service unavailable", 
+                    "message": "NewsAPI key is required for news analysis. Please set NEWSAPI_KEY environment variable."
+                }
+            )
+        else:
+            raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.exception(f"Unexpected error in chat for {ticker}")
         raise HTTPException(status_code=500, detail=f"Internal error: {e}")
