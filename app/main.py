@@ -23,6 +23,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .models import ChatRequest, ChatResponse, HealthResponse, TickerAnalysis
 from .analyzer import build_analysis
 from .chat import chat_with_ticker, has_openai_key
+from .services.news_aggregator import has_any_news_key, get_configured_providers
 from .news_fetcher import has_newsapi_key
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -69,6 +70,7 @@ def health_check() -> HealthResponse:
     return HealthResponse(
         status="ok",
         news_api_configured=has_newsapi_key(),
+        news_providers_configured=get_configured_providers(),
         openai_configured=has_openai_key(),
     )
 

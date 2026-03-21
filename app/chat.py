@@ -15,7 +15,7 @@ from openai import OpenAI, OpenAIError
 
 from .models import ChatMessage, ChatResponse, TickerAnalysis
 from .analyzer import build_analysis
-from .news_fetcher import fetch_news_for_period, has_newsapi_key
+from .services.news_aggregator import fetch_news_for_period, has_any_news_key
 
 logger = logging.getLogger(__name__)
 

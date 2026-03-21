@@ -10,7 +10,8 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from datetime import date, timedelta
 from app.stock_data import fetch_price_history, detect_major_movements, get_ticker_info
-from app.news_fetcher import fetch_news_for_movement, has_newsapi_key
+from app.services.news_aggregator import fetch_news_for_movement, has_any_news_key, get_configured_providers
+from app.news_fetcher import has_newsapi_key
 from app.analyzer import build_analysis
 from app.chat import chat_with_ticker, has_openai_key
 import pandas as pd
@@ -90,9 +91,9 @@ def test_news_fetching_company():
     print("TEST 3: News Fetching - Company-Specific Events")
     print("=" * 60)
     
-    if not has_newsapi_key():
-        print("⚠️  NEWS_API_KEY not configured, skipping news test")
-        print("   To test news fetching, set NEWS_API_KEY in your .env file")
+    if not has_any_news_key():
+        print("⚠️  No news API keys configured, skipping news test")
+        print("   Set at least one of: NEWS_API_KEY, GNEWS_API_KEY, JINA_API_KEY, EXA_API_KEY")
         return False
     
     try:
@@ -138,8 +139,8 @@ def test_news_fetching_competitor():
     print("TEST 4: News Fetching - Competitor/Industry Moves")
     print("=" * 60)
     
-    if not has_newsapi_key():
-        print("⚠️  NEWS_API_KEY not configured, skipping competitor news test")
+    if not has_any_news_key():
+        print("⚠️  No news API keys configured, skipping competitor news test")
         return False
     
     try:
@@ -186,8 +187,8 @@ def test_news_fetching_macro():
     print("TEST 5: News Fetching - Macro/Political Events")
     print("=" * 60)
     
-    if not has_newsapi_key():
-        print("⚠️  NEWS_API_KEY not configured, skipping macro news test")
+    if not has_any_news_key():
+        print("⚠️  No news API keys configured, skipping macro news test")
         return False
     
     try:
@@ -377,25 +378,21 @@ def test_api_filters():
         except ValueError as e:
             print(f"   ✅ Long date range validation works: {e}")
         
-        # Test NewsAPI free plan limitation warning
-        print("\nTesting NewsAPI free plan limitation...")
-        if has_newsapi_key():
-            old_date = date.today() - timedelta(days=60)  # Previous month
+        # Test news_source reflects configured providers
+        print("\nTesting news_source field...")
+        if has_any_news_key():
             try:
-                analysis_old = build_analysis(
+                analysis_src = build_analysis(
                     ticker="AAPL",
-                    start_date=old_date,
+                    start_date=date.today() - timedelta(days=10),
                     end_date=date.today(),
                     min_movement_pct=2.0
                 )
-                if analysis_old.news_note and "free plan" in analysis_old.news_note.lower():
-                    print(f"   ✅ NewsAPI free plan limitation noted: {analysis_old.news_note[:100]}...")
-                else:
-                    print(f"   ⚠️  NewsAPI free plan limitation not explicitly noted in news_note")
+                print(f"   ✅ news_source: {analysis_src.news_source}")
             except Exception as e:
-                print(f"   ❌ NewsAPI limitation test failed: {e}")
+                print(f"   ❌ news_source test failed: {e}")
         else:
-            print("   ⚠️  NewsAPI not configured - skipping free plan limitation test")
+            print("   ⚠️  No news providers configured - skipping news_source test")
         
         return True
         
@@ -470,7 +467,8 @@ def main():
     
     # Check environment
     print("Environment check:")
-    print(f"   NewsAPI configured: {has_newsapi_key()}")
+    configured = get_configured_providers()
+    print(f"   News providers configured: {', '.join(configured) if configured else 'none'}")
     print(f"   OpenAI configured: {has_openai_key()}")
     print()
     

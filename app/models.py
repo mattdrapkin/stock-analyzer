@@ -71,4 +71,5 @@ class ChatResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     news_api_configured: bool
+    news_providers_configured: List[str] = []
     openai_configured: bool
