@@ -16,7 +16,7 @@ from .stock_data import (
 )
 from .news_fetcher import (
     fetch_news_for_movement,
-    has_newsapi_key,
+    has_serpapi_key,
 )
 
 logger = logging.getLogger(__name__)
@@ -90,14 +90,7 @@ def build_analysis(
     if (end_date - start_date).days > max_range_days:
         raise ValueError(f"Date range cannot exceed {max_range_days} days")
     
-    # Check NewsAPI free plan limitation (only current month available)
     current_month_start = date.today().replace(day=1)
-    if start_date < current_month_start and has_newsapi_key():
-        logger.warning(
-            f"Requested start date {start_date} is before current month. "
-            f"NewsAPI free plan only provides news from {current_month_start} onwards. "
-            f"News articles may be limited or unavailable for earlier dates."
-        )
     cache_key = (
         f"{ticker.upper()}|{start_date}|{end_date}|{min_movement_pct}"
         f"|{include_competitors}|{include_macro}|{max_articles_per_category}"
@@ -119,10 +112,10 @@ def build_analysis(
     df = fetch_price_history(ticker, start_date, end_date)
     raw_movements = detect_major_movements(df, min_pct=min_movement_pct)
 
-    # 3. News using NewsAPI
-    if not has_newsapi_key():
+    # 3. News using SerpAPI
+    if not has_serpapi_key():
         raise ValueError(
-            "NEWS_API_KEY is required for news analysis. Please set the NEWS_API_KEY environment variable."
+            "SERPAPI_KEY is required for news analysis. Please set the SERPAPI_KEY environment variable."
         )
 
     # Track rate limit issues
@@ -167,24 +160,11 @@ def build_analysis(
 
     up = sum(1 for m in movements if m.direction == "up")
 
-    # Add rate limit warning if detected
     news_note: Optional[str] = None
     if rate_limit_hit:
         news_note = (
-            "Warning: Possible NewsAPI rate limiting detected. Some news articles may be missing. "
-            "Consider reducing the number of categories (competitor/macro) or upgrading your NewsAPI plan."
-        )
-    
-    # Add NewsAPI free plan limitation notice
-    if start_date < current_month_start and has_newsapi_key():
-        if news_note:
-            news_note += " "
-        else:
-            news_note = ""
-        news_note += (
-            f"Note: Requested period includes dates before {current_month_start}. "
-            f"NewsAPI free plan only provides news from the current month, so articles "
-            f"for earlier dates may be unavailable."
+            "Warning: Some news articles may be missing. "
+            "Consider reducing the number of categories (competitor/macro) or checking your SerpAPI quota."
         )
 
     result = TickerAnalysis(
@@ -199,7 +179,7 @@ def build_analysis(
         up_movements=up,
         down_movements=len(movements) - up,
         movements=movements,
-        news_source="NewsAPI",
+        news_source="SerpAPI",
         news_note=news_note,
     )
 

@@ -23,7 +23,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .models import ChatRequest, ChatResponse, HealthResponse, TickerAnalysis
 from .analyzer import build_analysis
 from .chat import chat_with_ticker, has_openai_key
-from .news_fetcher import has_newsapi_key
+from .news_fetcher import has_serpapi_key
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -41,7 +41,7 @@ app = FastAPI(
     title="Stock Movement Analyzer",
     description=(
         "Explains major stock price movements using relevant news articles. "
-        "Powered by yfinance, NewsAPI, and OpenAI."
+        "Powered by yfinance, SerpAPI, and OpenAI."
     ),
     version="1.0.0",
     docs_url="/docs",
@@ -68,7 +68,7 @@ def health_check() -> HealthResponse:
     """Returns API status and indicates which external keys are configured."""
     return HealthResponse(
         status="ok",
-        news_api_configured=has_newsapi_key(),
+        serpapi_configured=has_serpapi_key(),
         openai_configured=has_openai_key(),
     )
 
@@ -121,7 +121,7 @@ def get_analysis(
     - `include_competitors=true`             → also includes sector / industry news
     - `include_macro=true`                   → also includes Fed, rates, geopolitics
     
-    **NewsAPI Limitation**: Free plan only provides news from the current month onwards.
+    **News**: Powered by SerpAPI Google News.
     """
     resolved_end = end_date or date.today()
     resolved_start = start_date or (resolved_end - timedelta(days=90))
@@ -132,14 +132,6 @@ def get_analysis(
     if (resolved_end - resolved_start).days > 730:
         raise HTTPException(status_code=422, detail="Date range cannot exceed 2 years.")
     
-    # Warn about NewsAPI free plan limitations
-    current_month_start = date.today().replace(day=1)
-    if resolved_start < current_month_start:
-        logger.warning(
-            f"Request includes dates before {current_month_start}. "
-            f"NewsAPI free plan only provides news from current month onwards."
-        )
-
     try:
         return build_analysis(
             ticker=ticker.upper(),

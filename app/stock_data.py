@@ -122,7 +122,7 @@ def get_ticker_info(ticker: str) -> Dict:
 def get_yfinance_news(ticker: str) -> List[Dict]:
     """
     Fetch the most recent news from yfinance's Yahoo Finance feed.
-    Used as a free fallback when NewsAPI key is not configured.
+    Used as a free fallback when SerpAPI key is not configured.
     Note: no date-range filtering is available; returns the ~10 most recent items.
     """
     try:
