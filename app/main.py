@@ -120,14 +120,25 @@ def get_analysis(
     - `include_competitors=false` (default) → company-specific news only
     - `include_competitors=true`             → also includes sector / industry news
     - `include_macro=true`                   → also includes Fed, rates, geopolitics
+    
+    **NewsAPI Limitation**: Free plan only provides news from the current month onwards.
     """
     resolved_end = end_date or date.today()
     resolved_start = start_date or (resolved_end - timedelta(days=90))
 
+    # Validate date range
     if resolved_start > resolved_end:
-        raise HTTPException(status_code=422, detail="start_date must be before end_date.")
+        raise HTTPException(status_code=422, detail="start_date must be before or equal to end_date.")
     if (resolved_end - resolved_start).days > 730:
         raise HTTPException(status_code=422, detail="Date range cannot exceed 2 years.")
+    
+    # Warn about NewsAPI free plan limitations
+    current_month_start = date.today().replace(day=1)
+    if resolved_start < current_month_start:
+        logger.warning(
+            f"Request includes dates before {current_month_start}. "
+            f"NewsAPI free plan only provides news from current month onwards."
+        )
 
     try:
         return build_analysis(

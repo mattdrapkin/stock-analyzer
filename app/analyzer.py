@@ -77,7 +77,27 @@ def build_analysis(
 
     Caching: results keyed by (ticker, start, end, min_pct, competitors, macro)
     with a configurable TTL (default 30 min).
+    
+    Raises:
+        ValueError: For invalid parameters (date range, ticker, etc.)
     """
+    # Validate date range
+    if start_date > end_date:
+        raise ValueError("start_date must be before or equal to end_date")
+    
+    # Validate date range limits
+    max_range_days = 730  # 2 years
+    if (end_date - start_date).days > max_range_days:
+        raise ValueError(f"Date range cannot exceed {max_range_days} days")
+    
+    # Check NewsAPI free plan limitation (only current month available)
+    current_month_start = date.today().replace(day=1)
+    if start_date < current_month_start and has_newsapi_key():
+        logger.warning(
+            f"Requested start date {start_date} is before current month. "
+            f"NewsAPI free plan only provides news from {current_month_start} onwards. "
+            f"News articles may be limited or unavailable for earlier dates."
+        )
     cache_key = (
         f"{ticker.upper()}|{start_date}|{end_date}|{min_movement_pct}"
         f"|{include_competitors}|{include_macro}|{max_articles_per_category}"
@@ -153,6 +173,18 @@ def build_analysis(
         news_note = (
             "Warning: Possible NewsAPI rate limiting detected. Some news articles may be missing. "
             "Consider reducing the number of categories (competitor/macro) or upgrading your NewsAPI plan."
+        )
+    
+    # Add NewsAPI free plan limitation notice
+    if start_date < current_month_start and has_newsapi_key():
+        if news_note:
+            news_note += " "
+        else:
+            news_note = ""
+        news_note += (
+            f"Note: Requested period includes dates before {current_month_start}. "
+            f"NewsAPI free plan only provides news from the current month, so articles "
+            f"for earlier dates may be unavailable."
         )
 
     result = TickerAnalysis(
