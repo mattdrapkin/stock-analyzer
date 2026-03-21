@@ -20,7 +20,7 @@ from .news_fetcher import fetch_news_for_period, has_serpapi_key
 logger = logging.getLogger(__name__)
 
 OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-5.4-nano")
 
 
 def has_openai_key() -> bool:
@@ -152,16 +152,17 @@ def chat_with_ticker(
         messages.append({"role": turn.role, "content": turn.content})
     # Append the new user message
     messages.append({"role": "user", "content": message})
-
+    
     try:
         client = OpenAI(api_key=OPENAI_API_KEY)
         completion = client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=messages,
             temperature=0.3,
-            max_completion_tokens=1024,
         )
+        print("COMPLETION:", completion.choices)
         response_text = completion.choices[0].message.content or ""
+        print("RESPONSE:", response_text)
     except OpenAIError as e:
         logger.error(f"OpenAI API error: {e}")
         response_text = (
