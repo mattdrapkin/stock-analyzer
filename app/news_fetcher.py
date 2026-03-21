@@ -86,7 +86,14 @@ def _fetch_newsapi(
             resp.raise_for_status()
             data = resp.json()
     except httpx.HTTPStatusError as e:
-        logger.warning(f"NewsAPI HTTP error {e.response.status_code}: {e.response.text[:200]}")
+        if e.response.status_code == 429:
+            logger.error(
+                f"NewsAPI rate limit exceeded. Status: {e.response.status_code}. "
+                f"Response: {e.response.text[:200]}. "
+                f"Please check your NewsAPI plan limits and consider reducing request frequency."
+            )
+        else:
+            logger.warning(f"NewsAPI HTTP error {e.response.status_code}: {e.response.text[:200]}")
         return []
     except Exception as e:
         logger.warning(f"NewsAPI request failed: {e}")
