@@ -1,0 +1,74 @@
+from pydantic import BaseModel, Field
+from typing import Optional, List
+from datetime import date, datetime
+from enum import Enum
+
+
+class NewsCategory(str, Enum):
+    COMPANY = "company"
+    COMPETITOR = "competitor"
+    MACRO = "macro"
+
+
+class NewsArticle(BaseModel):
+    title: str
+    source: str
+    url: Optional[str] = None
+    published_at: Optional[datetime] = None
+    summary: Optional[str] = None
+    category: NewsCategory = NewsCategory.COMPANY
+
+
+class StockMovement(BaseModel):
+    date: date
+    open: float
+    close: float
+    high: float
+    low: float
+    volume: int
+    change_pct: float
+    direction: str  # "up" or "down"
+    news: List[NewsArticle] = []
+
+
+class TickerAnalysis(BaseModel):
+    ticker: str
+    company_name: Optional[str] = None
+    sector: Optional[str] = None
+    industry: Optional[str] = None
+    period_start: date
+    period_end: date
+    min_movement_pct: float
+    total_movements: int
+    up_movements: int
+    down_movements: int
+    movements: List[StockMovement]
+    news_source: str  # which news source was used
+    news_note: Optional[str] = None  # any caveats about news availability/coverage
+
+
+class ChatMessage(BaseModel):
+    role: str  # "user" or "assistant"
+    content: str
+
+
+class ChatRequest(BaseModel):
+    message: str
+    history: List[ChatMessage] = []
+    context_days: int = Field(default=60, ge=1, le=365)
+    min_movement_pct: float = Field(default=2.0, ge=0.1)
+    include_competitors: bool = False
+    include_macro: bool = False
+
+
+class ChatResponse(BaseModel):
+    response: str
+    ticker: str
+    movements_analyzed: int
+    context_used: bool
+
+
+class HealthResponse(BaseModel):
+    status: str
+    news_api_configured: bool
+    openai_configured: bool
