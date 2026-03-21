@@ -7,20 +7,18 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Use curl_cffi session if available to bypass Yahoo Finance per-IP rate limiting
+# curl_cffi is auto-detected by yfinance ≥0.2.x when installed — do NOT pass a
+# session= explicitly, as doing so corrupts yfinance's timezone cache and causes
+# AttributeError: 'str' object has no attribute 'name' (yfinance issues #2461, #2470).
 try:
-    from curl_cffi import requests as _curl_requests
-    _SESSION = _curl_requests.Session(impersonate="chrome110")
-    logger.info("curl_cffi session active — Yahoo Finance rate limit bypass enabled")
+    import curl_cffi as _curl_cffi  # noqa: F401
+    logger.info("curl_cffi detected — yfinance will use it automatically")
 except ImportError:
-    _SESSION = None
     logger.warning("curl_cffi not installed — Yahoo Finance rate limiting may apply")
 
 
 def _ticker(symbol: str) -> yf.Ticker:
-    """Return a yf.Ticker optionally backed by a curl_cffi session."""
-    if _SESSION is not None:
-        return yf.Ticker(symbol, session=_SESSION)
+    """Return a yf.Ticker; curl_cffi (if installed) is used automatically by yfinance."""
     return yf.Ticker(symbol)
 
 
