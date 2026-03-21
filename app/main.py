@@ -9,6 +9,7 @@ POST /api/v1/chat/{ticker}                  — multi-turn chat about a ticker
 """
 
 import os
+import json
 import logging
 from datetime import date, timedelta
 from typing import Optional
@@ -19,11 +20,22 @@ load_dotenv()
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 
 from .models import ChatRequest, ChatResponse, HealthResponse, TickerAnalysis
 from .analyzer import build_analysis
 from .chat import chat_with_ticker, has_openai_key
 from .news_fetcher import has_newsapi_key
+
+# ── Pretty JSON response ────────────────────────────────────────────────────
+
+def _pretty_response(data, status_code: int = 200) -> Response:
+    return Response(
+        content=json.dumps(data, indent=2, default=str),
+        status_code=status_code,
+        media_type="application/json",
+    )
+
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -64,13 +76,18 @@ app.add_middleware(
     tags=["System"],
     summary="Health check",
 )
-def health_check() -> HealthResponse:
+def health_check(
+    pretty: bool = Query(default=False, description="Return indented, human-readable JSON."),
+):
     """Returns API status and indicates which external keys are configured."""
-    return HealthResponse(
+    result = HealthResponse(
         status="ok",
         newsapi_configured=has_newsapi_key(),
         openai_configured=has_openai_key(),
     )
+    if pretty:
+        return _pretty_response(result.model_dump())
+    return result
 
 
 @app.get(
@@ -109,7 +126,8 @@ def get_analysis(
         le=20,
         description="Maximum news articles per category per movement day.",
     ),
-) -> TickerAnalysis:
+    pretty: bool = Query(default=False, description="Return indented, human-readable JSON."),
+):
     """
     Returns all major stock price movements for `ticker` within the requested
     period, each annotated with relevant news articles.
@@ -133,7 +151,7 @@ def get_analysis(
         raise HTTPException(status_code=422, detail="Date range cannot exceed 2 years.")
     
     try:
-        return build_analysis(
+        result = build_analysis(
             ticker=ticker.upper(),
             start_date=resolved_start,
             end_date=resolved_end,
@@ -143,6 +161,9 @@ def get_analysis(
             max_articles_per_category=max_articles,
             cache_ttl=CACHE_TTL,
         )
+        if pretty:
+            return _pretty_response(result.model_dump())
+        return result
     except ValueError as e:
         if "rate limit" in str(e).lower():
             raise HTTPException(
@@ -177,6 +198,7 @@ def get_analysis(
 def chat(
     ticker: str,
     body: ChatRequest,
+    pretty: bool = Query(default=False, description="Return indented, human-readable JSON."),
 ) -> ChatResponse:
     """
     Ask free-form questions about a ticker's major price movements.
@@ -195,7 +217,7 @@ def chat(
     - "Were any of the moves driven by macro events?"
     """
     try:
-        return chat_with_ticker(
+        result = chat_with_ticker(
             ticker=ticker.upper(),
             message=body.message,
             history=body.history,
@@ -204,6 +226,9 @@ def chat(
             include_competitors=body.include_competitors,
             include_macro=body.include_macro,
         )
+        if pretty:
+            return _pretty_response(result.model_dump())
+        return result
     except ValueError as e:
         if "rate limit" in str(e).lower():
             raise HTTPException(
