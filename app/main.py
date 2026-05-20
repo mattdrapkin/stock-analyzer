@@ -56,6 +56,107 @@ app.add_middleware(
 )
 
 
+# ── Mock Data for Demonstration ────────────────────────────────────────────────
+
+def _get_mock_analysis(ticker: str, start_date: date, end_date: date, min_movement_pct: float) -> TickerAnalysis:
+    """Generate mock analysis data for demonstration purposes."""
+    from .models import StockMovement, NewsArticle, NewsCategory
+    
+    # Mock company info
+    company_names = {
+        'AAPL': 'Apple Inc.',
+        'MSFT': 'Microsoft Corporation',
+        'GOOGL': 'Alphabet Inc.',
+        'TSLA': 'Tesla, Inc.',
+        'AMZN': 'Amazon.com, Inc.',
+    }
+    
+    company_name = company_names.get(ticker, f'{ticker} Corporation')
+    sector = 'Technology'
+    industry = 'Consumer Electronics'
+    
+    # Generate mock movements
+    import random
+    from datetime import timedelta
+    
+    movements = []
+    current_date = start_date
+    
+    # Generate 3-6 random movements
+    num_movements = random.randint(3, 6)
+    for i in range(num_movements):
+        days_offset = random.randint(0, (end_date - start_date).days)
+        move_date = start_date + timedelta(days=days_offset)
+        
+        is_up = random.choice([True, False])
+        change_pct = round(random.uniform(min_movement_pct, min_movement_pct * 3), 2)
+        if not is_up:
+            change_pct = -change_pct
+        
+        base_price = round(random.uniform(150, 200), 2)
+        open_price = base_price
+        close_price = round(base_price * (1 + change_pct / 100), 2)
+        high_price = round(max(open_price, close_price) * random.uniform(1.001, 1.01), 2)
+        low_price = round(min(open_price, close_price) * random.uniform(0.99, 0.999), 2)
+        volume = random.randint(50000000, 150000000)
+        
+        # Mock news articles
+        news_articles = []
+        num_articles = random.randint(1, 3)
+        for j in range(num_articles):
+            headlines = [
+                f"{company_name} reports strong quarterly earnings",
+                f"{ticker} stock surges on positive analyst rating",
+                f"{company_name} announces new product line",
+                f"Market rally boosts {ticker} shares",
+                f"{company_name} faces regulatory scrutiny",
+                f"Investors optimistic about {ticker} growth prospects",
+            ]
+            headlines = headlines[:num_articles]
+            
+            article = NewsArticle(
+                title=headlines[j],
+                source="Financial News",
+                url=f"https://example.com/news/{ticker.lower()}-{j}",
+                published_at=move_date,
+                summary=f"Breaking news about {ticker} with market implications.",
+                category=NewsCategory.COMPANY,
+            )
+            news_articles.append(article)
+        
+        movement = StockMovement(
+            date=move_date,
+            open=open_price,
+            close=close_price,
+            high=high_price,
+            low=low_price,
+            volume=volume,
+            change_pct=change_pct,
+            direction="up" if change_pct > 0 else "down",
+            news=news_articles,
+        )
+        movements.append(movement)
+    
+    movements.sort(key=lambda x: x.date)
+    
+    up_count = sum(1 for m in movements if m.direction == "up")
+    
+    return TickerAnalysis(
+        ticker=ticker,
+        company_name=company_name,
+        sector=sector,
+        industry=industry,
+        period_start=start_date,
+        period_end=end_date,
+        min_movement_pct=min_movement_pct,
+        total_movements=len(movements),
+        up_movements=up_count,
+        down_movements=len(movements) - up_count,
+        movements=movements,
+        news_source="Mock Data (Demonstration Mode)",
+        news_note="This is mock data for demonstration purposes. Set use_mock=false to use real data.",
+    )
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.get(
@@ -109,6 +210,10 @@ def get_analysis(
         le=20,
         description="Maximum news articles per category per movement day.",
     ),
+    use_mock: bool = Query(
+        default=False,
+        description="Use mock data for demonstration (bypasses yfinance).",
+    ),
 ) -> TickerAnalysis:
     """
     Returns all major stock price movements for `ticker` within the requested
@@ -128,6 +233,10 @@ def get_analysis(
         raise HTTPException(status_code=422, detail="start_date must be before end_date.")
     if (resolved_end - resolved_start).days > 730:
         raise HTTPException(status_code=422, detail="Date range cannot exceed 2 years.")
+
+    # Use mock data for demonstration if requested or if real data fails
+    if use_mock:
+        return _get_mock_analysis(ticker.upper(), resolved_start, resolved_end, min_movement_pct)
 
     try:
         return build_analysis(

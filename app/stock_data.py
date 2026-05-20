@@ -66,6 +66,25 @@ def fetch_price_history(
 
     df = _retry(_fetch)
     if df.empty:
+        # Fallback: try using period parameter instead of date range
+        logger.warning(f"Date range fetch failed for {ticker}, trying period parameter")
+        try:
+            days = (end_date - start_date).days
+            if days <= 30:
+                period = "1mo"
+            elif days <= 90:
+                period = "3mo"
+            elif days <= 180:
+                period = "6mo"
+            else:
+                period = "1y"
+            
+            df = _retry(lambda: t.history(period=period))
+        except Exception as e:
+            logger.error(f"Period fetch also failed for {ticker}: {e}")
+            raise ValueError(f"No price data found for ticker '{ticker}'. Check the symbol.")
+    
+    if df.empty:
         raise ValueError(f"No price data found for ticker '{ticker}'. Check the symbol.")
 
     # Remove timezone info for consistent datetime handling
@@ -111,10 +130,26 @@ def get_ticker_info(ticker: str) -> Dict:
     try:
         t = _ticker(ticker)
         info = _retry(lambda: t.info)
+        
+        # Handle different yfinance API response formats
+        if isinstance(info, dict):
+            company_name = info.get("longName") or info.get("shortName") or ticker
+            sector = info.get("sector")
+            industry = info.get("industry")
+        elif hasattr(info, '__dict__'):
+            # Handle object-based responses
+            company_name = getattr(info, 'longName', None) or getattr(info, 'shortName', None) or ticker
+            sector = getattr(info, 'sector', None)
+            industry = getattr(info, 'industry', None)
+        else:
+            company_name = ticker
+            sector = None
+            industry = None
+            
         return {
-            "company_name": info.get("longName") or info.get("shortName") or ticker,
-            "sector": info.get("sector"),
-            "industry": info.get("industry"),
+            "company_name": company_name,
+            "sector": sector,
+            "industry": industry,
         }
     except Exception as e:
         logger.warning(f"Could not fetch info for {ticker}: {e}")
