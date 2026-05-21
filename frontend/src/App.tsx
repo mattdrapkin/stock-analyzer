@@ -288,10 +288,10 @@ const MovementCard: React.FC<{ move: StockMovement }> = ({ move }) => {
             </div>
             <div className="flex items-center gap-2">
               <span className={`text-xl font-bold ${isUp ? 'text-emerald-600' : 'text-rose-600'}`}>
-                {isUp ? '+' : ''}{move.change_pct}%
+                {isUp ? '+' : ''}{Number(move.change_pct).toFixed(1)}%
               </span>
               <span className="text-slate-400 text-sm font-medium">
-                ${move.open} → ${move.close}
+                ${Number(move.open).toFixed(2)} → ${Number(move.close).toFixed(2)}
               </span>
             </div>
           </div>
