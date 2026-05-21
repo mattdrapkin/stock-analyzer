@@ -55,6 +55,23 @@ export interface ChatResponse {
   context_used: boolean;
 }
 
+export interface BasketTickerResult {
+  ticker: string;
+  company_name?: string;
+  start_price: number;
+  end_price: number;
+  total_change_pct: number;
+  direction: 'up' | 'down';
+}
+
+export interface BasketAnalysisResponse {
+  tickers: string[];
+  period_start: string;
+  period_end: string;
+  results: BasketTickerResult[];
+  total_analyzed: number;
+}
+
 export const stockApi = {
   getAnalysis: async (ticker: string, params?: {
     start_date?: string;
@@ -85,6 +102,15 @@ export const stockApi = {
 
   checkHealth: async () => {
     const response = await api.get('/health');
+    return response.data;
+  },
+
+  analyzeBasket: async (data: {
+    tickers: string[];
+    start_date: string;
+    end_date: string;
+  }) => {
+    const response = await api.post<BasketAnalysisResponse>('/basket', data);
     return response.data;
   }
 };

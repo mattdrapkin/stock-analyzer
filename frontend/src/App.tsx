@@ -13,10 +13,11 @@ import {
   ChevronDown,
   Loader2,
   AlertCircle,
-  X
+  X,
+  Layers
 } from 'lucide-react';
 import { stockApi } from './api';
-import type { TickerAnalysis, StockMovement, NewsArticle, ChatMessage } from './api';
+import type { TickerAnalysis, StockMovement, NewsArticle, ChatMessage, BasketAnalysisResponse, BasketTickerResult } from './api';
 import { format } from 'date-fns';
 
 const App: React.FC = () => {
@@ -32,6 +33,15 @@ const App: React.FC = () => {
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
   const [chatLoading, setChatLoading] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
+
+  // Basket analysis state
+  const [viewMode, setViewMode] = useState<'single' | 'basket'>('single');
+  const [basketTickers, setBasketTickers] = useState('AAPL,MSFT,GOOGL,TSLA,AMZN');
+  const [basketStartDate, setBasketStartDate] = useState<Date | null>(null);
+  const [basketEndDate, setBasketEndDate] = useState<Date | null>(null);
+  const [basketAnalysis, setBasketAnalysis] = useState<BasketAnalysisResponse | null>(null);
+  const [basketLoading, setBasketLoading] = useState(false);
+  const [basketError, setBasketError] = useState<string | null>(null);
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -71,6 +81,49 @@ const App: React.FC = () => {
     setEndDate(null);
   };
 
+  const handleBasketAnalysis = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    // Parse tickers from comma-separated string
+    const tickerList = basketTickers.split(',')
+      .map(t => t.trim().toUpperCase())
+      .filter(t => t.length > 0);
+    
+    if (tickerList.length === 0) {
+      setBasketError('Please enter at least one valid ticker');
+      return;
+    }
+    
+    const resolvedEnd = basketEndDate || new Date();
+    const resolvedStart = basketStartDate || new Date(new Date().setMonth(resolvedEnd.getMonth() - 3));
+    
+    setBasketLoading(true);
+    setBasketError(null);
+    try {
+      const data = await stockApi.analyzeBasket({
+        tickers: tickerList,
+        start_date: format(resolvedStart, 'yyyy-MM-dd'),
+        end_date: format(resolvedEnd, 'yyyy-MM-dd'),
+      });
+      setBasketAnalysis(data);
+    } catch (err: unknown) {
+      if (err && typeof err === 'object' && 'response' in err) {
+        const axiosError = err as { response: { data: { detail: string } } };
+        setBasketError(axiosError.response?.data?.detail || 'Failed to analyze basket');
+      } else {
+        setBasketError('Failed to analyze basket');
+      }
+      setBasketAnalysis(null);
+    } finally {
+      setBasketLoading(false);
+    }
+  };
+
+  const clearBasketDates = () => {
+    setBasketStartDate(null);
+    setBasketEndDate(null);
+  };
+
   const handleChat = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!chatMessage || !analysis) return;
@@ -102,212 +155,356 @@ const App: React.FC = () => {
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
       {/* Header */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-10">
-        <div className="max-w-6xl mx-auto px-4 py-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div className="flex items-center gap-2">
-            <div className="bg-indigo-600 p-2 rounded-lg">
-              <TrendingUp className="text-white w-6 h-6" />
+        <div className="max-w-6xl mx-auto px-4 py-4">
+          {/* Logo and View Toggle */}
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-3">
+              <div className="bg-indigo-600 p-2 rounded-lg">
+                <TrendingUp className="text-white w-6 h-6" />
+              </div>
+              <h1 className="text-xl font-bold tracking-tight">Stock Analyzer</h1>
             </div>
-            <h1 className="text-xl font-bold tracking-tight">Stock Analyzer</h1>
+            <div className="flex bg-slate-100 rounded-lg p-1">
+              <button
+                onClick={() => setViewMode('single')}
+                className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                  viewMode === 'single' 
+                    ? 'bg-white text-indigo-600 shadow-sm' 
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Single Ticker
+              </button>
+              <button
+                onClick={() => setViewMode('basket')}
+                className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                  viewMode === 'basket' 
+                    ? 'bg-white text-indigo-600 shadow-sm' 
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Layers className="w-4 h-4" />
+                Basket
+              </button>
+            </div>
           </div>
-          
-          <form onSubmit={handleSearch} className="flex flex-col md:flex-row gap-2 md:gap-3">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
-              <input
-                type="text"
-                value={ticker}
-                onChange={(e) => setTicker(e.target.value)}
-                placeholder="Enter Ticker (e.g. TSLA)"
-                className="pl-10 pr-4 py-2 bg-slate-100 border-transparent focus:bg-white focus:ring-2 focus:ring-indigo-500 rounded-lg outline-none w-full md:w-40 transition-all"
-              />
-            </div>
-            <div className="flex gap-2">
+
+          {/* Search Form */}
+          {viewMode === 'single' ? (
+            <form onSubmit={handleSearch} className="flex flex-col md:flex-row gap-2 md:gap-3">
               <div className="relative">
-                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4 pointer-events-none" />
-                <ReactDatePicker
-                  selected={startDate}
-                  onChange={(date) => setStartDate(date)}
-                  selectsStart
-                  startDate={startDate}
-                  endDate={endDate}
-                  placeholderText="Start Date"
-                  className="pl-10 pr-4 py-2 bg-slate-100 border-transparent focus:bg-white focus:ring-2 focus:ring-indigo-500 rounded-lg outline-none w-full md:w-36 transition-all text-sm"
-                  dateFormat="MMM d, yyyy"
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
+                <input
+                  type="text"
+                  value={ticker}
+                  onChange={(e) => setTicker(e.target.value)}
+                  placeholder="Enter Ticker (e.g. TSLA)"
+                  className="pl-10 pr-4 py-2 bg-slate-100 border-transparent focus:bg-white focus:ring-2 focus:ring-indigo-500 rounded-lg outline-none w-full md:w-40 transition-all"
                 />
               </div>
-              <div className="relative">
-                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4 pointer-events-none" />
-                <ReactDatePicker
-                  selected={endDate}
-                  onChange={(date) => setEndDate(date)}
-                  selectsEnd
-                  startDate={startDate}
-                  endDate={endDate}
-                  minDate={startDate}
-                  placeholderText="End Date"
-                  className="pl-10 pr-4 py-2 bg-slate-100 border-transparent focus:bg-white focus:ring-2 focus:ring-indigo-500 rounded-lg outline-none w-full md:w-36 transition-all text-sm"
-                  dateFormat="MMM d, yyyy"
+              <div className="flex gap-2">
+                <div className="relative">
+                  <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4 pointer-events-none" />
+                  <ReactDatePicker
+                    selected={startDate}
+                    onChange={(date) => setStartDate(date)}
+                    selectsStart
+                    startDate={startDate}
+                    endDate={endDate}
+                    placeholderText="Start Date"
+                    className="pl-10 pr-4 py-2 bg-slate-100 border-transparent focus:bg-white focus:ring-2 focus:ring-indigo-500 rounded-lg outline-none w-full md:w-36 transition-all text-sm"
+                    dateFormat="MMM d, yyyy"
+                  />
+                </div>
+                <div className="relative">
+                  <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4 pointer-events-none" />
+                  <ReactDatePicker
+                    selected={endDate}
+                    onChange={(date) => setEndDate(date)}
+                    selectsEnd
+                    startDate={startDate}
+                    endDate={endDate}
+                    minDate={startDate}
+                    placeholderText="End Date"
+                    className="pl-10 pr-4 py-2 bg-slate-100 border-transparent focus:bg-white focus:ring-2 focus:ring-indigo-500 rounded-lg outline-none w-full md:w-36 transition-all text-sm"
+                    dateFormat="MMM d, yyyy"
+                  />
+                </div>
+                {(startDate || endDate) && (
+                  <button
+                    type="button"
+                    onClick={clearDates}
+                    className="px-3 py-2 text-slate-500 hover:text-slate-700 hover:bg-slate-200 rounded-lg transition-colors"
+                    title="Clear dates"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+              <button
+                type="submit"
+                disabled={loading}
+                className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2"
+              >
+                {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Analyze'}
+              </button>
+            </form>
+          ) : (
+            <form onSubmit={handleBasketAnalysis} className="flex flex-col md:flex-row gap-2 md:gap-3">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
+                <input
+                  type="text"
+                  value={basketTickers}
+                  onChange={(e) => setBasketTickers(e.target.value)}
+                  placeholder="Tickers (e.g. AAPL,MSFT,GOOGL)"
+                  className="pl-10 pr-4 py-2 bg-slate-100 border-transparent focus:bg-white focus:ring-2 focus:ring-indigo-500 rounded-lg outline-none w-full transition-all"
                 />
               </div>
-              {(startDate || endDate) && (
-                <button
-                  type="button"
-                  onClick={clearDates}
-                  className="px-3 py-2 text-slate-500 hover:text-slate-700 hover:bg-slate-200 rounded-lg transition-colors"
-                  title="Clear dates"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              )}
-            </div>
-            <button
-              type="submit"
-              disabled={loading}
-              className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2"
-            >
-              {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Analyze'}
-            </button>
-          </form>
+              <div className="flex gap-2">
+                <div className="relative">
+                  <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4 pointer-events-none" />
+                  <ReactDatePicker
+                    selected={basketStartDate}
+                    onChange={(date) => setBasketStartDate(date)}
+                    selectsStart
+                    startDate={basketStartDate}
+                    endDate={basketEndDate}
+                    placeholderText="Start Date"
+                    className="pl-10 pr-4 py-2 bg-slate-100 border-transparent focus:bg-white focus:ring-2 focus:ring-indigo-500 rounded-lg outline-none w-full md:w-36 transition-all text-sm"
+                    dateFormat="MMM d, yyyy"
+                  />
+                </div>
+                <div className="relative">
+                  <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4 pointer-events-none" />
+                  <ReactDatePicker
+                    selected={basketEndDate}
+                    onChange={(date) => setBasketEndDate(date)}
+                    selectsEnd
+                    startDate={basketStartDate}
+                    endDate={basketEndDate}
+                    minDate={basketStartDate}
+                    placeholderText="End Date"
+                    className="pl-10 pr-4 py-2 bg-slate-100 border-transparent focus:bg-white focus:ring-2 focus:ring-indigo-500 rounded-lg outline-none w-full md:w-36 transition-all text-sm"
+                    dateFormat="MMM d, yyyy"
+                  />
+                </div>
+                {(basketStartDate || basketEndDate) && (
+                  <button
+                    type="button"
+                    onClick={clearBasketDates}
+                    className="px-3 py-2 text-slate-500 hover:text-slate-700 hover:bg-slate-200 rounded-lg transition-colors"
+                    title="Clear dates"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+              <button
+                type="submit"
+                disabled={basketLoading}
+                className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2 whitespace-nowrap"
+              >
+                {basketLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Analyze'}
+              </button>
+            </form>
+          )}
         </div>
       </header>
 
       <main className="max-w-6xl mx-auto px-4 py-8">
-        {error && (
-          <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl mb-8 flex items-center gap-3">
-            <AlertCircle className="w-5 h-5 shrink-0" />
-            <p>{error}</p>
-          </div>
-        )}
-
-        {!analysis && !loading && !error && (
-          <div className="text-center py-20">
-            <div className="bg-white w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6 shadow-sm border border-slate-100">
-              <Search className="text-slate-300 w-10 h-10" />
-            </div>
-            <h2 className="text-2xl font-semibold mb-2">Ready to Analyze</h2>
-            <p className="text-slate-500 max-w-md mx-auto">
-              Enter a stock ticker above to see major price movements and the news that caused them.
-            </p>
-          </div>
-        )}
-
-        {analysis && (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-            {/* Left Column: Ticker Info & Summary */}
-            <div className="lg:col-span-1 space-y-6">
-              <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-                <div className="flex justify-between items-start mb-4">
-                  <div>
-                    <h2 className="text-3xl font-bold">{analysis.ticker}</h2>
-                    <p className="text-slate-500 font-medium">{analysis.company_name}</p>
-                  </div>
-                  <div className="bg-slate-100 px-3 py-1 rounded-full text-xs font-bold text-slate-600 uppercase tracking-wider">
-                    {analysis.sector || 'N/A'}
-                  </div>
-                </div>
-                
-                <div className="grid grid-cols-2 gap-4 mt-6">
-                  <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-100">
-                    <p className="text-emerald-600 text-xs font-bold uppercase mb-1">Up Days</p>
-                    <p className="text-2xl font-bold text-emerald-700">{analysis.up_movements}</p>
-                  </div>
-                  <div className="bg-rose-50 p-3 rounded-xl border border-rose-100">
-                    <p className="text-rose-600 text-xs font-bold uppercase mb-1">Down Days</p>
-                    <p className="text-2xl font-bold text-rose-700">{analysis.down_movements}</p>
-                  </div>
-                </div>
-
-                <div className="mt-6 pt-6 border-t border-slate-100">
-                  <div className="flex items-center justify-between text-sm text-slate-500 mb-2">
-                    <span className="flex items-center gap-1.5"><Calendar className="w-4 h-4" /> Period</span>
-                    <span className="font-medium text-slate-700">
-                      {format(new Date(analysis.period_start), 'MMM d')} - {format(new Date(analysis.period_end), 'MMM d, yyyy')}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between text-sm text-slate-500">
-                    <span className="flex items-center gap-1.5"><TrendingUp className="w-4 h-4" /> Threshold</span>
-                    <span className="font-medium text-slate-700">±{analysis.min_movement_pct}%</span>
-                  </div>
-                </div>
+        {viewMode === 'single' ? (
+          <>
+            {error && (
+              <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl mb-8 flex items-center gap-3">
+                <AlertCircle className="w-5 h-5 shrink-0" />
+                <p>{error}</p>
               </div>
+            )}
 
-              {/* Chat Interface (Desktop) */}
-              <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden hidden lg:flex flex-col h-[500px]">
-                <div className="bg-slate-50 p-4 border-b border-slate-200 flex items-center gap-2">
-                  <MessageSquare className="w-5 h-5 text-indigo-600" />
-                  <h3 className="font-bold">AI Stock Assistant</h3>
+            {!analysis && !loading && !error && (
+              <div className="text-center py-20">
+                <div className="bg-white w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6 shadow-sm border border-slate-100">
+                  <Search className="text-slate-300 w-10 h-10" />
                 </div>
-                
-                <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                  {chatHistory.length === 0 ? (
-                    <div className="text-center py-8">
-                      <p className="text-sm text-slate-400">Ask about {analysis.ticker}'s movements...</p>
+                <h2 className="text-2xl font-semibold mb-2">Ready to Analyze</h2>
+                <p className="text-slate-500 max-w-md mx-auto">
+                  Enter a stock ticker above to see major price movements and the news that caused them.
+                </p>
+              </div>
+            )}
+
+            {analysis && (
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                {/* Left Column: Ticker Info & Summary */}
+                <div className="lg:col-span-1 space-y-6">
+                  <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                    <div className="flex justify-between items-start mb-4">
+                      <div>
+                        <h2 className="text-3xl font-bold">{analysis.ticker}</h2>
+                        <p className="text-slate-500 font-medium">{analysis.company_name}</p>
+                      </div>
+                      <div className="bg-slate-100 px-3 py-1 rounded-full text-xs font-bold text-slate-600 uppercase tracking-wider">
+                        {analysis.sector || 'N/A'}
+                      </div>
                     </div>
-                  ) : (
-                    chatHistory.map((msg, i) => (
-                      <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                        <div className={`max-w-[85%] p-3 rounded-2xl text-sm ${
-                          msg.role === 'user' 
-                            ? 'bg-indigo-600 text-white rounded-tr-none' 
-                            : 'bg-slate-100 text-slate-800 rounded-tl-none'
-                        }`}>
-                          {msg.content}
+                    
+                    <div className="grid grid-cols-2 gap-4 mt-6">
+                      <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-100">
+                        <p className="text-emerald-600 text-xs font-bold uppercase mb-1">Up Days</p>
+                        <p className="text-2xl font-bold text-emerald-700">{analysis.up_movements}</p>
+                      </div>
+                      <div className="bg-rose-50 p-3 rounded-xl border border-rose-100">
+                        <p className="text-rose-600 text-xs font-bold uppercase mb-1">Down Days</p>
+                        <p className="text-2xl font-bold text-rose-700">{analysis.down_movements}</p>
+                      </div>
+                    </div>
+
+                    <div className="mt-6 pt-6 border-t border-slate-100">
+                      <div className="flex items-center justify-between text-sm text-slate-500 mb-2">
+                        <span className="flex items-center gap-1.5"><Calendar className="w-4 h-4" /> Period</span>
+                        <span className="font-medium text-slate-700">
+                          {format(new Date(analysis.period_start), 'MMM d')} - {format(new Date(analysis.period_end), 'MMM d, yyyy')}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between text-sm text-slate-500">
+                        <span className="flex items-center gap-1.5"><TrendingUp className="w-4 h-4" /> Threshold</span>
+                        <span className="font-medium text-slate-700">±{analysis.min_movement_pct}%</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Chat Interface (Desktop) */}
+                  <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden hidden lg:flex flex-col h-[500px]">
+                    <div className="bg-slate-50 p-4 border-b border-slate-200 flex items-center gap-2">
+                      <MessageSquare className="w-5 h-5 text-indigo-600" />
+                      <h3 className="font-bold">AI Stock Assistant</h3>
+                    </div>
+                    
+                    <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                      {chatHistory.length === 0 ? (
+                        <div className="text-center py-8">
+                          <p className="text-sm text-slate-400">Ask about {analysis.ticker}'s movements...</p>
                         </div>
+                      ) : (
+                        chatHistory.map((msg, i) => (
+                          <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                            <div className={`max-w-[85%] p-3 rounded-2xl text-sm ${
+                              msg.role === 'user' 
+                                ? 'bg-indigo-600 text-white rounded-tr-none' 
+                                : 'bg-slate-100 text-slate-800 rounded-tl-none'
+                            }`}>
+                              {msg.content}
+                            </div>
+                          </div>
+                        ))
+                      )}
+                      {chatLoading && (
+                        <div className="flex justify-start">
+                          <div className="bg-slate-100 p-3 rounded-2xl rounded-tl-none">
+                            <Loader2 className="w-4 h-4 animate-spin text-slate-400" />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    <form onSubmit={handleChat} className="p-4 bg-white border-t border-slate-100">
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={chatMessage}
+                          onChange={(e) => setChatMessage(e.target.value)}
+                          placeholder="Ask why it moved..."
+                          className="flex-1 bg-slate-50 border-none rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                        />
+                        <button 
+                          type="submit" 
+                          disabled={chatLoading || !chatMessage}
+                          className="bg-indigo-600 text-white p-2 rounded-lg disabled:opacity-50"
+                          title="Send message"
+                        >
+                          <ChevronRight className="w-4 h-4" />
+                        </button>
                       </div>
-                    ))
-                  )}
-                  {chatLoading && (
-                    <div className="flex justify-start">
-                      <div className="bg-slate-100 p-3 rounded-2xl rounded-tl-none">
-                        <Loader2 className="w-4 h-4 animate-spin text-slate-400" />
-                      </div>
+                    </form>
+                  </div>
+                </div>
+
+                {/* Right Column: Movements Timeline */}
+                <div className="lg:col-span-2 space-y-4">
+                  <h3 className="text-lg font-bold flex items-center gap-2 mb-4">
+                    Significant Movements
+                    <span className="bg-slate-200 text-slate-600 text-xs px-2 py-0.5 rounded-full">
+                      {analysis.total_movements}
+                    </span>
+                  </h3>
+
+                  {analysis.movements.map((move, i) => (
+                    <MovementCard key={i} move={move} />
+                  ))}
+
+                  {analysis.total_movements === 0 && (
+                    <div className="bg-white p-12 rounded-2xl text-center border border-slate-200 border-dashed">
+                      <Info className="w-12 h-12 text-slate-200 mx-auto mb-4" />
+                      <p className="text-slate-500">No major movements detected in this period.</p>
                     </div>
                   )}
                 </div>
-
-                <form onSubmit={handleChat} className="p-4 bg-white border-t border-slate-100">
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={chatMessage}
-                      onChange={(e) => setChatMessage(e.target.value)}
-                      placeholder="Ask why it moved..."
-                      className="flex-1 bg-slate-50 border-none rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
-                    />
-                    <button 
-                      type="submit" 
-                      disabled={chatLoading || !chatMessage}
-                      className="bg-indigo-600 text-white p-2 rounded-lg disabled:opacity-50"
-                      title="Send message"
-                    >
-                      <ChevronRight className="w-4 h-4" />
-                    </button>
-                  </div>
-                </form>
               </div>
-            </div>
+            )}
+          </>
+        ) : (
+          <>
+            {basketError && (
+              <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl mb-8 flex items-center gap-3">
+                <AlertCircle className="w-5 h-5 shrink-0" />
+                <p>{basketError}</p>
+              </div>
+            )}
 
-            {/* Right Column: Movements Timeline */}
-            <div className="lg:col-span-2 space-y-4">
-              <h3 className="text-lg font-bold flex items-center gap-2 mb-4">
-                Significant Movements
-                <span className="bg-slate-200 text-slate-600 text-xs px-2 py-0.5 rounded-full">
-                  {analysis.total_movements}
-                </span>
-              </h3>
-
-              {analysis.movements.map((move, i) => (
-                <MovementCard key={i} move={move} />
-              ))}
-
-              {analysis.total_movements === 0 && (
-                <div className="bg-white p-12 rounded-2xl text-center border border-slate-200 border-dashed">
-                  <Info className="w-12 h-12 text-slate-200 mx-auto mb-4" />
-                  <p className="text-slate-500">No major movements detected in this period.</p>
+            {!basketAnalysis && !basketLoading && !basketError && (
+              <div className="text-center py-20">
+                <div className="bg-white w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6 shadow-sm border border-slate-100">
+                  <Layers className="text-slate-300 w-10 h-10" />
                 </div>
-              )}
-            </div>
-          </div>
+                <h2 className="text-2xl font-semibold mb-2">Basket Analysis</h2>
+                <p className="text-slate-500 max-w-md mx-auto">
+                  Enter multiple ticker symbols above to compare their performance and find the biggest movers.
+                </p>
+              </div>
+            )}
+
+            {basketAnalysis && (
+              <div className="space-y-6">
+                <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                  <div className="flex items-center justify-between mb-6">
+                    <div>
+                      <h2 className="text-2xl font-bold">Basket Performance</h2>
+                      <p className="text-slate-500">
+                        {format(new Date(basketAnalysis.period_start), 'MMM d')} - {format(new Date(basketAnalysis.period_end), 'MMM d, yyyy')}
+                      </p>
+                    </div>
+                    <div className="bg-indigo-100 px-4 py-2 rounded-full text-sm font-bold text-indigo-700">
+                      {basketAnalysis.total_analyzed} analyzed
+                    </div>
+                  </div>
+
+                  <div className="space-y-3">
+                    {basketAnalysis.results.map((result, i) => (
+                      <BasketResultCard key={i} result={result} rank={i + 1} />
+                    ))}
+
+                    {basketAnalysis.results.length === 0 && (
+                      <div className="bg-slate-50 p-12 rounded-2xl text-center border border-slate-200 border-dashed">
+                        <Info className="w-12 h-12 text-slate-200 mx-auto mb-4" />
+                        <p className="text-slate-500">No valid results found for the provided tickers.</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+          </>
         )}
       </main>
 
@@ -408,6 +605,41 @@ const NewsItem: React.FC<{ article: NewsArticle }> = ({ article }) => {
       {article.summary && (
         <p className="text-sm text-slate-500 mt-1 line-clamp-2">{article.summary}</p>
       )}
+    </div>
+  );
+};
+
+const BasketResultCard: React.FC<{ result: BasketTickerResult; rank: number }> = ({ result, rank }) => {
+  const isUp = result.direction === 'up';
+  
+  return (
+    <div className="bg-slate-50 rounded-xl p-4 flex items-center gap-4 hover:bg-slate-100 transition-colors">
+      <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 font-bold text-sm ${
+        rank <= 3 ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-600'
+      }`}>
+        {rank}
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 mb-1">
+          <span className="font-bold text-slate-900">{result.ticker}</span>
+          {result.company_name && (
+            <span className="text-sm text-slate-500 truncate">{result.company_name}</span>
+          )}
+        </div>
+        <div className="flex items-center gap-3 text-sm">
+          <span className="text-slate-500">
+            ${result.start_price.toFixed(2)} → ${result.end_price.toFixed(2)}
+          </span>
+        </div>
+      </div>
+      <div className={`text-right shrink-0`}>
+        <div className={`text-xl font-bold ${isUp ? 'text-emerald-600' : 'text-rose-600'}`}>
+          {isUp ? '+' : ''}{result.total_change_pct.toFixed(1)}%
+        </div>
+        <div className={`text-xs font-bold uppercase ${isUp ? 'text-emerald-500' : 'text-rose-500'}`}>
+          {result.direction}
+        </div>
+      </div>
     </div>
   );
 };

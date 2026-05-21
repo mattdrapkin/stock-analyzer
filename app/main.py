@@ -20,8 +20,16 @@ load_dotenv()
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
-from .models import ChatRequest, ChatResponse, HealthResponse, TickerAnalysis
+from .models import (
+    BasketAnalysisRequest,
+    BasketAnalysisResponse,
+    ChatRequest,
+    ChatResponse,
+    HealthResponse,
+    TickerAnalysis,
+)
 from .analyzer import build_analysis
+from .basket_analyzer import analyze_basket
 from .chat import chat_with_ticker, has_openai_key
 from .news_fetcher import has_newsapi_key
 
@@ -296,4 +304,56 @@ def chat(
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.exception(f"Unexpected error in chat for {ticker}")
+        raise HTTPException(status_code=500, detail=f"Internal error: {e}")
+
+
+@app.post(
+    "/api/v1/basket",
+    response_model=BasketAnalysisResponse,
+    tags=["Basket"],
+    summary="Analyze a basket of securities to find the biggest movers",
+)
+def analyze_basket_endpoint(
+    body: BasketAnalysisRequest,
+) -> BasketAnalysisResponse:
+    """
+    Analyze multiple securities over a date range to identify the biggest movers.
+
+    Takes a comma-separated list of ticker symbols and a date range, then
+    calculates the total percentage change for each ticker from the first
+    to the last trading day in the period. Results are sorted by absolute
+    percentage change to show the biggest movers first.
+
+    **Example request body:**
+    ```json
+    {
+      "tickers": ["AAPL", "MSFT", "GOOGL", "TSLA", "AMZN"],
+      "start_date": "2024-01-01",
+      "end_date": "2024-12-31"
+    }
+    ```
+    """
+    # Normalize tickers
+    normalized_tickers = [t.upper().strip() for t in body.tickers if t.strip()]
+    
+    if not normalized_tickers:
+        raise HTTPException(status_code=422, detail="At least one valid ticker is required.")
+    
+    if len(normalized_tickers) > 50:
+        raise HTTPException(status_code=422, detail="Maximum 50 tickers allowed per request.")
+    
+    if body.start_date > body.end_date:
+        raise HTTPException(status_code=422, detail="start_date must be before end_date.")
+    
+    if (body.end_date - body.start_date).days > 730:
+        raise HTTPException(status_code=422, detail="Date range cannot exceed 2 years.")
+    
+    try:
+        return analyze_basket(
+            tickers=normalized_tickers,
+            start_date=body.start_date,
+            end_date=body.end_date,
+        )
+    except Exception as e:
+        logger.exception(f"Unexpected error in basket analysis")
         raise HTTPException(status_code=500, detail=f"Internal error: {e}")

@@ -72,3 +72,26 @@ class HealthResponse(BaseModel):
     status: str
     news_api_configured: bool
     openai_configured: bool
+
+
+class BasketTickerResult(BaseModel):
+    ticker: str
+    company_name: Optional[str] = None
+    start_price: float
+    end_price: float
+    total_change_pct: float
+    direction: str  # "up" or "down"
+
+
+class BasketAnalysisRequest(BaseModel):
+    tickers: List[str] = Field(..., min_items=1, max_items=50, description="List of ticker symbols")
+    start_date: date
+    end_date: date
+
+
+class BasketAnalysisResponse(BaseModel):
+    tickers: List[str]
+    period_start: date
+    period_end: date
+    results: List[BasketTickerResult]
+    total_analyzed: int
