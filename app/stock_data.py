@@ -7,23 +7,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Use curl_cffi session if available to bypass Yahoo Finance per-IP rate limiting
-try:
-    from curl_cffi import requests as _curl_requests
-    _SESSION = _curl_requests.Session(impersonate="chrome110")
-    logger.info("curl_cffi session active — Yahoo Finance rate limit bypass enabled")
-except ImportError:
-    _SESSION = None
-    logger.warning("curl_cffi not installed — Yahoo Finance rate limiting may apply")
-
-
-def _ticker(symbol: str) -> yf.Ticker:
-    """Return a yf.Ticker optionally backed by a curl_cffi session."""
-    if _SESSION is not None:
-        return yf.Ticker(symbol, session=_SESSION)
-    return yf.Ticker(symbol)
-
-
 def _retry(fn, retries: int = 4, base_delay: float = 5.0):
     """Call fn() with exponential backoff on rate-limit responses."""
     last_exc: Exception = RuntimeError("No attempts made")
@@ -52,10 +35,8 @@ def fetch_price_history(
 ) -> pd.DataFrame:
     """
     Fetch historical OHLCV data for a ticker via yfinance.
-    curl_cffi (listed in requirements.txt) must be installed so that yfinance
-    can bypass Yahoo Finance's per-IP rate limiting.
     """
-    t = _ticker(ticker)
+    t = yf.Ticker(ticker)     
     end_inclusive = end_date + timedelta(days=1)
 
     def _fetch():
@@ -128,7 +109,7 @@ def detect_major_movements(
 def get_ticker_info(ticker: str) -> Dict:
     """Return basic company metadata from yfinance."""
     try:
-        t = _ticker(ticker)
+        t = yf.Ticker(ticker)
         info = _retry(lambda: t.info)
         
         # Handle different yfinance API response formats
@@ -163,7 +144,7 @@ def get_yfinance_news(ticker: str) -> List[Dict]:
     Note: no date-range filtering is available; returns the ~10 most recent items.
     """
     try:
-        t = _ticker(ticker)
+        t = yf.Ticker(ticker)
         raw_news = t.news or []
         articles = []
         for item in raw_news:

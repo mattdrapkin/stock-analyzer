@@ -66,7 +66,7 @@ export const stockApi = {
     use_mock?: boolean;
   }) => {
     const response = await api.get<TickerAnalysis>(`/analysis/${ticker}`, { 
-      params: { use_mock: true, ...params } 
+      params 
     });
     return response.data;
   },
