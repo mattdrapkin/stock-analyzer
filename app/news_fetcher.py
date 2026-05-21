@@ -215,6 +215,109 @@ def has_newsapi_key() -> bool:
     return bool(NEWSAPI_KEY)
 
 
+def fetch_mock_news_for_movement(
+    movement_date: date,
+    company_name: str,
+    ticker: str,
+    sector: Optional[str] = None,
+    industry: Optional[str] = None,
+    include_competitors: bool = False,
+    include_macro: bool = False,
+    max_per_category: int = 5,
+) -> List[Dict]:
+    """
+    Generate mock news articles for testing purposes.
+    
+    Returns realistic-looking news articles with categories based on the flags.
+    """
+    from datetime import timedelta
+    import random
+    
+    mock_articles = []
+    
+    # Company-specific news
+    company_news = [
+        {
+            "title": f"{company_name} Reports Strong Quarterly Earnings, Stock Surges",
+            "source": "Bloomberg",
+            "url": f"https://example.com/{ticker.lower()}-earnings",
+            "published_at": movement_date,
+            "summary": f"{company_name} announced better-than-expected quarterly results, beating analyst estimates on both revenue and earnings per share. The company raised its full-year guidance, citing strong demand across all product lines.",
+            "category": "company"
+        },
+        {
+            "title": f"{company_name} Announces New Product Line, Investors React Positively",
+            "source": "Reuters",
+            "url": f"https://example.com/{ticker.lower()}-product",
+            "published_at": movement_date - timedelta(days=1),
+            "summary": f"{company_name} unveiled its latest product innovation, promising to revolutionize the market. Analysts believe this could drive significant revenue growth in the coming quarters.",
+            "category": "company"
+        },
+        {
+            "title": f"Analysts Upgrade {company_name} Stock on Strong Outlook",
+            "source": "CNBC",
+            "url": f"https://example.com/{ticker.lower()}-upgrade",
+            "published_at": movement_date + timedelta(days=1),
+            "summary": f"Major investment banks have upgraded their price targets for {company_name}, citing improved operational efficiency and market positioning. The stock has gained momentum following the positive coverage.",
+            "category": "company"
+        }
+    ]
+    
+    for article in company_news[:max_per_category]:
+        mock_articles.append(article)
+    
+    # Competitor/industry news
+    if include_competitors:
+        industry_name = industry or sector or "Technology"
+        competitor_news = [
+            {
+                "title": f"{industry_name} Sector Sees Consolidation Wave",
+                "source": "Wall Street Journal",
+                "url": "https://example.com/sector-consolidation",
+                "published_at": movement_date,
+                "summary": f"The {industry_name} industry is undergoing significant consolidation as larger players acquire smaller competitors. This trend is expected to reshape the competitive landscape.",
+                "category": "competitor"
+            },
+            {
+                "title": f"Competitor Announces Strategic Partnership in {industry_name}",
+                "source": "Financial Times",
+                "url": "https://example.com/competitor-partnership",
+                "published_at": movement_date - timedelta(days=1),
+                "summary": f"A major competitor in the {industry_name} space has formed a strategic partnership to expand its market reach. Industry analysts are watching closely for potential competitive implications.",
+                "category": "competitor"
+            }
+        ]
+        
+        for article in competitor_news[:max_per_category]:
+            mock_articles.append(article)
+    
+    # Macro news
+    if include_macro:
+        macro_news = [
+            {
+                "title": "Federal Reserve Signals Potential Rate Adjustments",
+                "source": "Reuters",
+                "url": "https://example.com/fed-rates",
+                "published_at": movement_date,
+                "summary": "The Federal Reserve has indicated it may adjust interest rates in the coming months based on economic data. Markets are reacting to the possibility of changes in monetary policy.",
+                "category": "macro"
+            },
+            {
+                "title": "Inflation Data Shows Mixed Signals Across Economy",
+                "source": "Bloomberg",
+                "url": "https://example.com/inflation-data",
+                "published_at": movement_date - timedelta(days=1),
+                "summary": "Latest inflation readings present a mixed picture, with some sectors showing price stability while others continue to experience upward pressure. Economists are divided on the implications for future policy.",
+                "category": "macro"
+            }
+        ]
+        
+        for article in macro_news[:max_per_category]:
+            mock_articles.append(article)
+    
+    return mock_articles
+
+
 def fetch_news_for_movement(
     movement_date: date,
     company_name: str,

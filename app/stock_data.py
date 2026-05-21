@@ -5,7 +5,12 @@ from datetime import date, datetime, timedelta
 from typing import List, Dict, Optional
 import logging
 
+from curl_cffi import requests
+
 logger = logging.getLogger(__name__)
+
+# Create a session with Chrome impersonation to avoid rate limits
+_session = requests.Session(impersonate="chrome")
 
 def _retry(fn, retries: int = 4, base_delay: float = 5.0):
     """Call fn() with exponential backoff on rate-limit responses."""
@@ -36,7 +41,7 @@ def fetch_price_history(
     """
     Fetch historical OHLCV data for a ticker via yfinance.
     """
-    t = yf.Ticker(ticker)     
+    t = yf.Ticker(ticker, session=_session)
     end_inclusive = end_date + timedelta(days=1)
 
     def _fetch():
@@ -109,7 +114,7 @@ def detect_major_movements(
 def get_ticker_info(ticker: str) -> Dict:
     """Return basic company metadata from yfinance."""
     try:
-        t = yf.Ticker(ticker)
+        t = yf.Ticker(ticker, session=_session)
         info = _retry(lambda: t.info)
         
         # Handle different yfinance API response formats
@@ -144,7 +149,7 @@ def get_yfinance_news(ticker: str) -> List[Dict]:
     Note: no date-range filtering is available; returns the ~10 most recent items.
     """
     try:
-        t = yf.Ticker(ticker)
+        t = yf.Ticker(ticker, session=_session)
         raw_news = t.news or []
         articles = []
         for item in raw_news:

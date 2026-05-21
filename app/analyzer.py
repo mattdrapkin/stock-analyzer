@@ -17,6 +17,7 @@ from .stock_data import (
 )
 from .news_fetcher import (
     fetch_news_for_movement,
+    fetch_mock_news_for_movement,
     has_newsapi_key,
 )
 
@@ -100,44 +101,26 @@ def build_analysis(
     df = fetch_price_history(ticker, start_date, end_date)
     raw_movements = detect_major_movements(df, min_pct=min_movement_pct)
 
-    # 3. News — use NewsAPI if key is present, else yfinance fallback
-    use_newsapi = has_newsapi_key()
-    news_source = "NewsAPI" if use_newsapi else "Yahoo Finance (yfinance fallback)"
-
-    # For the yfinance fallback we fetch once and filter by proximity to each
-    # movement date (best-effort since Yahoo doesn't support date queries).
-    # Only attach news to movements within the last 7 days — beyond that the
-    # current feed is too stale to be meaningful.
-    FALLBACK_RECENCY_DAYS = 7
-    yf_fallback_news = []
-    if not use_newsapi:
-        yf_fallback_news = get_yfinance_news(ticker)
+    # 3. News — use mock data for now
+    news_source = "Mock News Data"
 
     # 4. Build StockMovement objects with attached news
     movements = []
     for raw in raw_movements:
         mv_date: date = raw["date"]
 
-        if use_newsapi:
-            raw_articles = fetch_news_for_movement(
-                movement_date=mv_date,
-                company_name=company_name,
-                ticker=ticker,
-                sector=sector,
-                industry=industry,
-                include_competitors=include_competitors,
-                include_macro=include_macro,
-                max_per_category=max_articles_per_category,
-            )
-            articles = [_to_news_article(a) for a in raw_articles]
-        else:
-            # Yfinance fallback: only useful for recent movements because the
-            # feed returns current articles with no historical date support.
-            days_ago = (date.today() - mv_date).days
-            if days_ago <= FALLBACK_RECENCY_DAYS:
-                articles = [_to_news_article(a) for a in yf_fallback_news[:5]]
-            else:
-                articles = []
+        # Use mock news data
+        raw_articles = fetch_mock_news_for_movement(
+            movement_date=mv_date,
+            company_name=company_name,
+            ticker=ticker,
+            sector=sector,
+            industry=industry,
+            include_competitors=include_competitors,
+            include_macro=include_macro,
+            max_per_category=max_articles_per_category,
+        )
+        articles = [_to_news_article(a) for a in raw_articles]
 
         movements.append(
             StockMovement(
@@ -154,14 +137,7 @@ def build_analysis(
         )
 
     up = sum(1 for m in movements if m.direction == "up")
-    news_note: Optional[str] = None
-    if not use_newsapi:
-        news_note = (
-            "NewsAPI key not configured. Using Yahoo Finance fallback news which only "
-            "covers the most recent ~10 articles and cannot be filtered by date. "
-            "News is only attached to movements within the last 7 days. "
-            "Set NEWS_API_KEY in .env for full historical news coverage."
-        )
+    news_note: Optional[str] = "Using mock news data for testing purposes."
 
     result = TickerAnalysis(
         ticker=ticker,
