@@ -1,7 +1,8 @@
 """
-News fetching module.
+News fetching module using OpenAI Responses API with web_search tool.
 
-Primary source : NewsAPI (https://newsapi.org) — requires NEWSAPI_KEY env var.
+This module leverages OpenAI's web search capability to find relevant news
+with direct source citations and AI-generated summaries.
 
 News categories
 ---------------
@@ -13,16 +14,14 @@ News categories
 import os
 import logging
 from datetime import date, datetime, timedelta
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 
-from newsapi import NewsApiClient
 from openai import OpenAI, OpenAIError
 
 logger = logging.getLogger(__name__)
 
-NEWSAPI_KEY: str = os.getenv("NEWSAPI_KEY", "")
 OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-5.4-nano")
+OPENAI_SEARCH_MODEL: str = os.getenv("OPENAI_SEARCH_MODEL", "gpt-5-search-api")
 
 # How many days before / after a movement to search for news
 DEFAULT_DAYS_BEFORE = 2
@@ -31,188 +30,333 @@ DEFAULT_DAYS_AFTER = 1
 
 # ── Query builders ────────────────────────────────────────────────────────────
 
-def _company_query(company_name: str, ticker: str) -> str:
-    """Simple query targeting the specific company."""
-    if not company_name and not ticker:
-        logger.warning("Empty company_name and ticker provided for company query")
-        return ""
-
-    parts = []
-    if company_name:
-        safe_name = company_name.replace('"', "").strip()
-        if safe_name:
-            parts.append(f'"{safe_name}"')
-    if ticker:
-        parts.append(f'"{ticker.upper()}"')
-
-    return " OR ".join(parts) if parts else ""
-
-
-def _competitor_query(sector: Optional[str], industry: Optional[str]) -> str:
-    """Broad query for sector/industry news."""
-    parts = []
-    
-    if industry:
-        industry_clean = industry.strip().replace('"', "")
-        if industry_clean:
-            parts.append(f'"{industry_clean}"')
-        else:
-            logger.warning("Industry becomes empty after sanitization")
-    
-    if sector:
-        sector_clean = sector.strip().replace('"', "")
-        if sector_clean:
-            parts.append(f'"{sector_clean}"')
-        else:
-            logger.warning("Sector becomes empty after sanitization")
-    
-    base = " OR ".join(parts) if parts else "stock market"
-    return f"({base}) AND (earnings OR merger OR acquisition OR results OR outlook)"
-
-
-def _macro_query() -> str:
-    """Query for macro / political events that move markets."""
+def _build_company_search_prompt(
+    company_name: str,
+    ticker: str,
+    movement_date: date,
+    from_date: date,
+    to_date: date,
+) -> str:
+    """Build search prompt for company-specific news."""
     return (
-        "Federal Reserve OR interest rate OR inflation OR GDP OR recession "
-        "OR trade war OR tariff OR geopolitical OR central bank OR rate hike "
-        "OR rate cut OR jobs report OR unemployment"
+        f"Find recent news articles about {company_name} ({ticker}) "
+        f"between {from_date.isoformat()} and {to_date.isoformat()}. "
+        f"Focus on company-specific events like earnings reports, product launches, "
+        f"executive changes, lawsuits, regulatory actions, or major announcements "
+        f"that could explain stock price movements around {movement_date.isoformat()}."
     )
 
 
-def _llm_competitor_query(
+def _build_competitor_search_prompt(
     company_name: str,
     ticker: str,
     sector: Optional[str],
     industry: Optional[str],
+    movement_date: date,
+    from_date: date,
+    to_date: date,
 ) -> str:
-    """Use GPT to identify specific public competitors and build a targeted search query."""
+    """Build search prompt for competitor/industry news."""
+    industry_info = industry or sector or "the industry"
+    return (
+        f"Find news about competitors and industry trends in {industry_info} "
+        f"between {from_date.isoformat()} and {to_date.isoformat()}. "
+        f"Focus on competitor earnings, mergers, acquisitions, market share changes, "
+        f"or sector-wide developments that could impact {company_name} ({ticker}) "
+        f"around {movement_date.isoformat()}."
+    )
+
+
+def _build_macro_search_prompt(
+    movement_date: date,
+    from_date: date,
+    to_date: date,
+) -> str:
+    """Build search prompt for macro/geopolitical news."""
+    return (
+        f"Find major macroeconomic and geopolitical news between "
+        f"{from_date.isoformat()} and {to_date.isoformat()}. "
+        f"Focus on Federal Reserve decisions, interest rate changes, inflation data, "
+        f"GDP reports, unemployment figures, trade policy, tariffs, or major "
+        f"geopolitical events that could impact stock markets around {movement_date.isoformat()}."
+    )
+
+
+# ── OpenAI Chat Completions with web search ────────────────────────────────────
+
+def _batch_search_with_openai(
+    company_name: str,
+    ticker: str,
+    from_date: date,
+    to_date: date,
+    include_competitors: bool = False,
+    include_macro: bool = False,
+) -> Dict[str, Tuple[str, List[str]]]:
+    """
+    Perform a single batch web search for a ticker across the entire date range.
+    This is much more efficient than searching per-movement.
+    
+    Returns:
+        Dict mapping category to (ai_summary, sources) tuples
+    """
     if not OPENAI_API_KEY:
-        return _competitor_query(sector, industry)
+        logger.debug("OpenAI API key not configured, returning empty results")
+        return {}
+    
+    try:
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        
+        # Build a comprehensive search prompt for the entire period
+        prompt_parts = [
+            f"Find and summarize all major news about {company_name} ({ticker}) "
+            f"between {from_date.isoformat()} and {to_date.isoformat()}. "
+            f"Focus on events that could explain significant stock price movements: "
+            f"earnings reports, product launches, executive changes, lawsuits, "
+            f"regulatory actions, or major announcements."
+        ]
+        
+        if include_competitors:
+            prompt_parts.append(
+                " Also include competitor and industry news that could impact the stock."
+            )
+        
+        if include_macro:
+            prompt_parts.append(
+                " Also include major macroeconomic events (Fed decisions, interest rates, "
+                "inflation, geopolitical events) that could impact stock markets."
+            )
+        
+        prompt_parts.append(
+            " Provide a comprehensive summary organized by date, with direct source URLs. "
+            "Focus on the most impactful news events."
+        )
+        
+        prompt = " ".join(prompt_parts)
+        
+        response = client.chat.completions.create(
+            model=OPENAI_SEARCH_MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a financial research assistant. Search for and summarize relevant news articles across a time period. Always include direct source URLs in your response. Organize by date and focus on the most impactful events."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+        )
+        
+        ai_summary = response.choices[0].message.content or ""
+        
+        # Extract sources
+        import re
+        url_pattern = r'https?://[^\s<>"{}|\\^`\[\]]+'
+        urls = list(set(re.findall(url_pattern, ai_summary)))
+        
+        # Return as a single "company" category summary
+        return {
+            "company": (ai_summary, urls)
+        }
+        
+    except OpenAIError as e:
+        logger.error(f"OpenAI batch web search failed: {e}")
+        return {}
+    except Exception as e:
+        logger.error(f"Unexpected error in batch web search: {e}")
+        return {}
+
+
+def _search_with_openai(
+    search_prompt: str,
+    category: str,
+) -> Tuple[str, List[str], List[str]]:
+    """
+    Use OpenAI Chat Completions API with search-enabled model to find news.
+    
+    Returns:
+        Tuple of (ai_summary, sources, search_queries)
+    """
+    if not OPENAI_API_KEY:
+        logger.debug("OpenAI API key not configured, returning empty results")
+        return ("", [], [])
 
     try:
         client = OpenAI(api_key=OPENAI_API_KEY)
-        prompt = (
-            f"You are a financial research assistant. Given the company '{company_name}' "
-            f"(ticker: {ticker}), sector: {sector or 'unknown'}, industry: {industry or 'unknown'}, "
-            f"list the 4-5 most direct publicly-traded competitors by company name. "
-            f"Return ONLY a comma-separated list of company names, nothing else. "
-            f"Example format: Apple, Microsoft, Google, Meta"
-        )
+        
+        # Use Chat Completions with search-enabled model
+        # Search-enabled models automatically perform web search and include citations
         response = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.1,
+            model=OPENAI_SEARCH_MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a financial research assistant. Search for and summarize relevant news articles. Always include direct source URLs in your response."
+                },
+                {
+                    "role": "user",
+                    "content": search_prompt
+                }
+            ],
         )
-        competitors_str = response.choices[0].message.content.strip()
-        competitors = [c.strip() for c in competitors_str.split(",") if c.strip()]
-        if not competitors:
-            return _competitor_query(sector, industry)
-        name_parts = " OR ".join(f'"{c}"' for c in competitors[:5])
-        logger.debug(f"LLM competitor query for {ticker}: {name_parts}")
-        return f"({name_parts}) AND (earnings OR merger OR acquisition OR results OR outlook OR stock)"
-    except (OpenAIError, Exception) as e:
-        logger.warning(f"LLM competitor query failed, falling back to static: {e}")
-        return _competitor_query(sector, industry)
-
-
-# ── NewsAPI client ────────────────────────────────────────────────────────────
-
-def _fetch_newsapi(
-    query: str,
-    from_date: date,
-    to_date: date,
-    max_results: int = 10,
-) -> List[Dict]:
-    """Hit the NewsAPI /everything endpoint and return normalised articles."""
-    if not NEWSAPI_KEY:
-        logger.debug("NewsAPI key not configured, returning empty results")
-        return []
-
-    if not query.strip():
-        logger.warning("Empty query provided to NewsAPI")
-        return []
-
-    if from_date > to_date:
-        logger.error(f"Invalid date range: from_date {from_date} > to_date {to_date}")
-        return []
-
-    if max_results <= 0:
-        logger.warning(f"Invalid max_results {max_results}, using default 10")
-        max_results = 10
-
-    try:
-        client = NewsApiClient(api_key=NEWSAPI_KEY)
-        response = client.get_everything(
-            q=query,
-            from_param=from_date.isoformat(),
-            to=to_date.isoformat(),
-            language="en",
-            sort_by="relevancy",
-            page_size=min(max_results * 3, 100),
-        )
+        
+        ai_summary = response.choices[0].message.content or ""
+        
+        # Extract sources from the response if available
+        sources = []
+        search_queries = []
+        
+        # Search models typically include citations in the response
+        # We'll parse URLs from the summary as a fallback
+        import re
+        url_pattern = r'https?://[^\s<>"{}|\\^`\[\]]+'
+        urls = re.findall(url_pattern, ai_summary)
+        sources = list(set(urls))  # Deduplicate
+        
+        logger.debug(f"Web search for {category}: found {len(sources)} sources")
+        return (ai_summary, sources, search_queries)
+        
+    except OpenAIError as e:
+        logger.error(f"OpenAI web search failed for {category}: {e}")
+        return ("", [], [])
     except Exception as e:
-        logger.error(f"NewsAPI request failed: {e}")
-        return []
-
-    if response.get("status") != "ok":
-        logger.error(f"NewsAPI returned error: {response.get('message', 'unknown')}")
-        return []
-
-    raw_articles = response.get("articles", []) or []
-    logger.debug(f"NewsAPI returned {len(raw_articles)} results for query: {query[:50]}...")
-
-    articles = []
-    for i, item in enumerate(raw_articles):
-        try:
-            title = item.get("title", "") or ""
-            if not title or title == "[Removed]":
-                continue
-
-            source_obj = item.get("source", {})
-            source_name = (source_obj.get("name") or "Unknown") if isinstance(source_obj, dict) else "Unknown"
-
-            url = item.get("url", "") or ""
-
-            published_at = _parse_datetime(item.get("publishedAt"))
-
-            summary = item.get("description") or item.get("content") or ""
-            if isinstance(summary, str):
-                summary = summary[:600].strip()
-            else:
-                summary = ""
-
-            articles.append({
-                "title": title.strip(),
-                "source": source_name.strip(),
-                "url": url or None,
-                "published_at": published_at,
-                "summary": summary,
-            })
-
-            if len(articles) >= max_results:
-                break
-
-        except Exception as e:
-            logger.warning(f"Error processing article {i}: {e}")
-            continue
-
-    logger.debug(f"Successfully processed {len(articles)} valid articles")
-    return articles
-
-
-def _parse_datetime(s: Optional[str]) -> Optional[datetime]:
-    if not s:
-        return None
-    try:
-        return datetime.fromisoformat(s.replace("Z", "+00:00")).replace(tzinfo=None)
-    except Exception:
-        return None
+        logger.error(f"Unexpected error in web search for {category}: {e}")
+        return ("", [], [])
 
 
 # ── Public interface ──────────────────────────────────────────────────────────
 
-def has_newsapi_key() -> bool:
-    return bool(NEWSAPI_KEY)
+def has_openai_key() -> bool:
+    return bool(OPENAI_API_KEY)
+
+
+def fetch_batch_news_for_period(
+    company_name: str,
+    ticker: str,
+    from_date: date,
+    to_date: date,
+    include_competitors: bool = False,
+    include_macro: bool = False,
+) -> List[Dict]:
+    """
+    Fetch news summaries for an entire date range in a single batch query.
+    This is much more efficient than per-movement queries and avoids rate limits.
+    
+    Returns:
+        List of summary dictionaries with 'category', 'ai_summary', 'sources'
+    """
+    if not OPENAI_API_KEY:
+        logger.warning("OpenAI API key not configured, cannot fetch news summaries")
+        return []
+    
+    if not company_name or not ticker:
+        logger.error("company_name and ticker are required for news fetching")
+        return []
+    
+    if from_date > to_date:
+        logger.error(f"Invalid date range: from_date {from_date} > to_date {to_date}")
+        return []
+    
+    logger.debug(f"Fetching batch news for {ticker} from {from_date} to {to_date}")
+    
+    results = _batch_search_with_openai(
+        company_name=company_name,
+        ticker=ticker,
+        from_date=from_date,
+        to_date=to_date,
+        include_competitors=include_competitors,
+        include_macro=include_macro,
+    )
+    
+    summaries = []
+    for category, (ai_summary, sources) in results.items():
+        if ai_summary:
+            summaries.append({
+                "category": category,
+                "ai_summary": ai_summary,
+                "sources": sources,
+                "search_queries": [],
+            })
+    
+    return summaries
+
+
+def fetch_news_summaries_for_movement(
+    movement_date: date,
+    company_name: str,
+    ticker: str,
+    sector: Optional[str] = None,
+    industry: Optional[str] = None,
+    include_competitors: bool = False,
+    include_macro: bool = False,
+    days_before: int = DEFAULT_DAYS_BEFORE,
+    days_after: int = DEFAULT_DAYS_AFTER,
+) -> List[Dict]:
+    """
+    Fetch AI-generated news summaries with citations using OpenAI web search.
+    
+    Returns a list of summary dictionaries with:
+    - category: NewsCategory value
+    - ai_summary: AI-generated summary text
+    - sources: List of source URLs
+    - search_queries: List of search queries used
+    """
+    if not OPENAI_API_KEY:
+        logger.warning("OpenAI API key not configured, cannot fetch news summaries")
+        return []
+    
+    if not company_name or not ticker:
+        logger.error("company_name and ticker are required for news fetching")
+        return []
+    
+    from_date = movement_date - timedelta(days=days_before)
+    to_date = movement_date + timedelta(days=days_after)
+    
+    logger.debug(f"Fetching news summaries for {ticker} around {movement_date} "
+                f"({from_date} to {to_date})")
+    
+    summaries = []
+    
+    # Company-specific news (always included)
+    company_prompt = _build_company_search_prompt(
+        company_name, ticker, movement_date, from_date, to_date
+    )
+    ai_summary, sources, queries = _search_with_openai(company_prompt, "company")
+    if ai_summary:
+        summaries.append({
+            "category": "company",
+            "ai_summary": ai_summary,
+            "sources": sources,
+            "search_queries": queries,
+        })
+    
+    # Competitor/industry news
+    if include_competitors:
+        competitor_prompt = _build_competitor_search_prompt(
+            company_name, ticker, sector, industry, movement_date, from_date, to_date
+        )
+        ai_summary, sources, queries = _search_with_openai(competitor_prompt, "competitor")
+        if ai_summary:
+            summaries.append({
+                "category": "competitor",
+                "ai_summary": ai_summary,
+                "sources": sources,
+                "search_queries": queries,
+            })
+    
+    # Macro news
+    if include_macro:
+        macro_prompt = _build_macro_search_prompt(movement_date, from_date, to_date)
+        ai_summary, sources, queries = _search_with_openai(macro_prompt, "macro")
+        if ai_summary:
+            summaries.append({
+                "category": "macro",
+                "ai_summary": ai_summary,
+                "sources": sources,
+                "search_queries": queries,
+            })
+    
+    return summaries
 
 
 def fetch_mock_news_for_movement(
@@ -331,10 +475,10 @@ def fetch_news_for_movement(
     max_per_category: int = 5,
 ) -> List[Dict]:
     """
-    Fetch news articles relevant to a single major-movement day.
-
-    Searches a window of [movement_date - days_before, movement_date + days_after]
-    across up to three categories depending on the flags passed.
+    Fetch news summaries using OpenAI web search.
+    
+    This is now a wrapper around fetch_news_summaries_for_movement for backward compatibility.
+    Returns summaries instead of individual articles.
     
     Args:
         movement_date: The date of the stock movement
@@ -346,52 +490,22 @@ def fetch_news_for_movement(
         include_macro: Whether to fetch macro/political news
         days_before: Days before movement_date to search
         days_after: Days after movement_date to search
-        max_per_category: Maximum articles per category
+        max_per_category: Ignored (kept for backward compatibility)
     
     Returns:
-        List of normalized article dictionaries with 'category' field
+        List of summary dictionaries with 'category', 'ai_summary', 'sources', 'search_queries'
     """
-    # Validate inputs
-    if not company_name or not ticker:
-        logger.error("company_name and ticker are required for news fetching")
-        return []
-    
-    if days_before < 0 or days_after < 0:
-        logger.error(f"Invalid days_before/days_after: {days_before}/{days_after}")
-        return []
-    
-    if max_per_category <= 0:
-        logger.warning(f"Invalid max_per_category {max_per_category}, using default 5")
-        max_per_category = 5
-    
-    from_date = movement_date - timedelta(days=days_before)
-    to_date = movement_date + timedelta(days=days_after)
-    
-    logger.debug(f"Fetching news for {ticker} around {movement_date} "
-                f"({from_date} to {to_date})")
-
-    all_articles: List[Dict] = []
-
-    # ── Company-specific (always on) ─────────────────────────────────────────
-    q = _company_query(company_name, ticker)
-    for a in _fetch_newsapi(q, from_date, to_date, max_per_category):
-        a["category"] = "company"
-        all_articles.append(a)
-
-    # ── Competitor / industry (medium) ────────────────────────────────────────
-    if include_competitors:
-        q = _llm_competitor_query(company_name, ticker, sector, industry)
-        for a in _fetch_newsapi(q, from_date, to_date, max_per_category):
-            a["category"] = "competitor"
-            all_articles.append(a)
-
-    # ── Macro / political (hard) ──────────────────────────────────────────────
-    if include_macro:
-        for a in _fetch_newsapi(_macro_query(), from_date, to_date, max_per_category):
-            a["category"] = "macro"
-            all_articles.append(a)
-
-    return all_articles
+    return fetch_news_summaries_for_movement(
+        movement_date=movement_date,
+        company_name=company_name,
+        ticker=ticker,
+        sector=sector,
+        industry=industry,
+        include_competitors=include_competitors,
+        include_macro=include_macro,
+        days_before=days_before,
+        days_after=days_after,
+    )
 
 
 def fetch_news_for_period(
@@ -406,8 +520,7 @@ def fetch_news_for_period(
     max_per_category: int = 10,
 ) -> List[Dict]:
     """
-    Fetch news for an entire date range (used to build LLM chat context).
-    Similar to fetch_news_for_movement but over a wider window.
+    Fetch news summaries for an entire date range using OpenAI web search.
     
     Args:
         from_date: Start date for news search
@@ -418,12 +531,15 @@ def fetch_news_for_period(
         industry: Optional industry for competitor news
         include_competitors: Whether to fetch competitor/industry news
         include_macro: Whether to fetch macro/political news
-        max_per_category: Maximum articles per category
+        max_per_category: Ignored (kept for backward compatibility)
     
     Returns:
-        List of normalized article dictionaries with 'category' field
+        List of summary dictionaries with 'category', 'ai_summary', 'sources', 'search_queries'
     """
-    # Validate inputs
+    if not OPENAI_API_KEY:
+        logger.warning("OpenAI API key not configured, cannot fetch news summaries")
+        return []
+    
     if not company_name or not ticker:
         logger.error("company_name and ticker are required for news fetching")
         return []
@@ -432,27 +548,47 @@ def fetch_news_for_period(
         logger.error(f"Invalid date range: from_date {from_date} > to_date {to_date}")
         return []
     
-    if max_per_category <= 0:
-        logger.warning(f"Invalid max_per_category {max_per_category}, using default 10")
-        max_per_category = 10
+    logger.debug(f"Fetching news summaries for {ticker} from {from_date} to {to_date}")
     
-    logger.debug(f"Fetching news for {ticker} from {from_date} to {to_date}")
-    all_articles: List[Dict] = []
-
-    q = _company_query(company_name, ticker)
-    for a in _fetch_newsapi(q, from_date, to_date, max_per_category):
-        a["category"] = "company"
-        all_articles.append(a)
-
+    summaries = []
+    
+    # Company-specific news
+    company_prompt = _build_company_search_prompt(
+        company_name, ticker, to_date, from_date, to_date
+    )
+    ai_summary, sources, queries = _search_with_openai(company_prompt, "company")
+    if ai_summary:
+        summaries.append({
+            "category": "company",
+            "ai_summary": ai_summary,
+            "sources": sources,
+            "search_queries": queries,
+        })
+    
+    # Competitor/industry news
     if include_competitors:
-        q = _llm_competitor_query(company_name, ticker, sector, industry)
-        for a in _fetch_newsapi(q, from_date, to_date, max_per_category):
-            a["category"] = "competitor"
-            all_articles.append(a)
-
+        competitor_prompt = _build_competitor_search_prompt(
+            company_name, ticker, sector, industry, to_date, from_date, to_date
+        )
+        ai_summary, sources, queries = _search_with_openai(competitor_prompt, "competitor")
+        if ai_summary:
+            summaries.append({
+                "category": "competitor",
+                "ai_summary": ai_summary,
+                "sources": sources,
+                "search_queries": queries,
+            })
+    
+    # Macro news
     if include_macro:
-        for a in _fetch_newsapi(_macro_query(), from_date, to_date, max_per_category):
-            a["category"] = "macro"
-            all_articles.append(a)
-
-    return all_articles
+        macro_prompt = _build_macro_search_prompt(to_date, from_date, to_date)
+        ai_summary, sources, queries = _search_with_openai(macro_prompt, "macro")
+        if ai_summary:
+            summaries.append({
+                "category": "macro",
+                "ai_summary": ai_summary,
+                "sources": sources,
+                "search_queries": queries,
+            })
+    
+    return summaries

@@ -15,16 +15,12 @@ from openai import OpenAI, OpenAIError
 
 from .models import ChatMessage, ChatResponse, TickerAnalysis
 from .analyzer import build_analysis
-from .news_fetcher import has_newsapi_key
+from .news_fetcher import has_openai_key
 
 logger = logging.getLogger(__name__)
 
 OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-5.4-nano")
-
-
-def has_openai_key() -> bool:
-    return bool(OPENAI_API_KEY)
 
 
 # ── Context builder ───────────────────────────────────────────────────────────
@@ -45,15 +41,39 @@ def _format_analysis_as_context(analysis: TickerAnalysis) -> str:
         "─" * 60,
     ]
 
+    # Display batch news summary if available (from web search)
+    if analysis.batch_news_summaries:
+        lines.append("\n" + "─" * 60)
+        lines.append("NEWS SUMMARY (Entire Period)")
+        lines.append("─" * 60)
+        for summary in analysis.batch_news_summaries:
+            category_label = {
+                "company": "COMPANY-SPECIFIC NEWS",
+                "competitor": "COMPETITOR / INDUSTRY NEWS",
+                "macro": "MACRO / GEOPOLITICAL NEWS",
+            }.get(summary.category.value, "NEWS")
+            
+            lines.append(f"\n>> {category_label}:")
+            lines.append(f"   {summary.ai_summary}")
+            if summary.sources:
+                lines.append(f"   Sources ({len(summary.sources)}):")
+                for i, source in enumerate(summary.sources[:5], 1):
+                    lines.append(f"     {i}. {source}")
+
     if not analysis.movements:
         lines.append("(No major movements found in this period.)")
     else:
+        lines.append("\n" + "─" * 60)
+        lines.append("MOVEMENT DETAILS")
+        lines.append("─" * 60)
+        
         for mv in analysis.movements:
             lines.append(
                 f"\nDATE: {mv.date}  |  {mv.direction.upper()} {mv.change_pct:+.2f}%"
                 f"  |  Open: ${mv.open:.2f}  →  Close: ${mv.close:.2f}"
                 f"  |  Volume: {mv.volume:,}"
             )
+            # Handle individual articles (from mock data)
             if mv.news:
                 company_news = [a for a in mv.news if a.category.value == "company"]
                 competitor_news = [a for a in mv.news if a.category.value == "competitor"]
@@ -75,7 +95,7 @@ def _format_analysis_as_context(analysis: TickerAnalysis) -> str:
                 _render_articles(competitor_news, "COMPETITOR / INDUSTRY NEWS")
                 _render_articles(macro_news, "MACRO / GEOPOLITICAL NEWS")
             else:
-                lines.append("  (No news articles found for this movement.)")
+                lines.append("  (See batch news summary above for context)")
 
     return "\n".join(lines)
 
@@ -83,9 +103,10 @@ def _format_analysis_as_context(analysis: TickerAnalysis) -> str:
 # ── System prompt ─────────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT = """You are an expert financial analyst AI assistant.
-You have been given structured data about major stock price movements and related news articles for a specific company.
+You have been given structured data about major stock price movements and related news for a specific company.
 
-News articles are grouped into three distinct categories — COMPANY-SPECIFIC, COMPETITOR / INDUSTRY, and MACRO / GEOPOLITICAL.
+News is provided either as AI-generated summaries with source citations, or as individual articles.
+News is grouped into three distinct categories — COMPANY-SPECIFIC, COMPETITOR / INDUSTRY, and MACRO / GEOPOLITICAL.
 
 Your job is to:
 1. Explain WHY the stock moved significantly on specific dates, drawing on the provided news.
@@ -96,7 +117,7 @@ Your job is to:
 3. If a category has no relevant news for a given move, omit it rather than speculating.
 4. Be intellectually honest — if available news does not clearly explain a move, say so and suggest what *type* of event could be responsible.
 5. Keep responses concise and well-structured. Use clear section headers to separate the three news categories when multiple are present.
-6. When citing news, reference the article title and date naturally in your answer.
+6. When citing news, reference sources naturally in your answer. For AI summaries, you can reference the source URLs provided.
 7. Never fabricate news events or financial data.
 
 The structured data provided below is your sole source of truth. Do not use outside knowledge about specific events unless asked explicitly.

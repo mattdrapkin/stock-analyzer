@@ -10,6 +10,13 @@ class NewsCategory(str, Enum):
     MACRO = "macro"
 
 
+class URLCitation(BaseModel):
+    url: str
+    title: str
+    start_index: int
+    end_index: int
+
+
 class NewsArticle(BaseModel):
     title: str
     source: str
@@ -17,6 +24,14 @@ class NewsArticle(BaseModel):
     published_at: Optional[datetime] = None
     summary: Optional[str] = None
     category: NewsCategory = NewsCategory.COMPANY
+    citations: List[URLCitation] = []
+
+
+class NewsSearchSummary(BaseModel):
+    category: NewsCategory
+    ai_summary: str
+    sources: List[str] = []
+    search_queries: List[str] = []
 
 
 class StockMovement(BaseModel):
@@ -29,6 +44,7 @@ class StockMovement(BaseModel):
     change_pct: float
     direction: str  # "up" or "down"
     news: List[NewsArticle] = []
+    news_summaries: List[NewsSearchSummary] = []
 
 
 class TickerAnalysis(BaseModel):
@@ -45,6 +61,7 @@ class TickerAnalysis(BaseModel):
     movements: List[StockMovement]
     news_source: str  # which news source was used
     news_note: Optional[str] = None  # any caveats about news availability/coverage
+    batch_news_summaries: List[NewsSearchSummary] = []  # News summaries for entire period
 
 
 class ChatMessage(BaseModel):

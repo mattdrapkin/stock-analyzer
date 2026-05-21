@@ -15,6 +15,13 @@ export interface NewsArticle {
   category: 'company' | 'competitor' | 'macro';
 }
 
+export interface NewsSearchSummary {
+  category: 'company' | 'competitor' | 'macro';
+  ai_summary: string;
+  sources: string[];
+  search_queries: string[];
+}
+
 export interface StockMovement {
   date: string;
   open: number;
@@ -41,6 +48,7 @@ export interface TickerAnalysis {
   movements: StockMovement[];
   news_source: string;
   news_note?: string;
+  batch_news_summaries: NewsSearchSummary[];
 }
 
 export interface ChatMessage {

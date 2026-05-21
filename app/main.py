@@ -31,7 +31,7 @@ from .models import (
 from .analyzer import build_analysis
 from .basket_analyzer import analyze_basket
 from .chat import chat_with_ticker, has_openai_key
-from .news_fetcher import has_newsapi_key
+from .news_fetcher import has_openai_key as news_has_openai_key
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -48,8 +48,8 @@ CACHE_TTL: int = int(os.getenv("CACHE_TTL_SECONDS", "1800"))
 app = FastAPI(
     title="Stock Movement Analyzer",
     description=(
-        "Explains major stock price movements using relevant news articles. "
-        "Powered by yfinance, NewsAPI, and OpenAI."
+        "Explains major stock price movements using AI-powered web search and news analysis. "
+        "Powered by yfinance and OpenAI Responses API with web_search."
     ),
     version="1.0.0",
     docs_url="/docs",
@@ -177,7 +177,7 @@ def health_check() -> HealthResponse:
     """Returns API status and indicates which external keys are configured."""
     return HealthResponse(
         status="ok",
-        news_api_configured=has_newsapi_key(),
+        news_api_configured=news_has_openai_key(),
         openai_configured=has_openai_key(),
     )
 

@@ -7,4 +7,3 @@ pandas==2.2.3
 python-dotenv==1.0.1
 pydantic==2.10.6
 pydantic-settings==2.7.1
-newsapi-python==0.2.7

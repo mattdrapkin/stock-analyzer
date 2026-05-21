@@ -17,8 +17,90 @@ import {
   Layers
 } from 'lucide-react';
 import { stockApi } from './api';
-import type { TickerAnalysis, StockMovement, NewsArticle, ChatMessage, BasketAnalysisResponse, BasketTickerResult } from './api';
+import type { TickerAnalysis, StockMovement, NewsArticle, ChatMessage, BasketAnalysisResponse, BasketTickerResult, NewsSearchSummary } from './api';
 import { format } from 'date-fns';
+
+// Helper function to format AI summary text with basic markdown-like formatting
+const formatSummaryText = (text: string) => {
+  if (!text) return null;
+  
+  const lines = text.split('\n');
+  const formattedLines: React.ReactNode[] = [];
+  
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    
+    // Handle headers (lines starting with #)
+    if (line.startsWith('#')) {
+      const headerText = line.replace(/^#+\s*/, '');
+      const level = line.match(/^#+/)?.[0].length || 1;
+      const headerLevel = Math.min(level + 2, 6);
+      if (headerLevel === 3) {
+        formattedLines.push(
+          <h3 key={i} className="font-bold text-slate-800 mt-4 mb-2">
+            {headerText}
+          </h3>
+        );
+      } else if (headerLevel === 4) {
+        formattedLines.push(
+          <h4 key={i} className="font-semibold text-slate-800 mt-3 mb-2">
+            {headerText}
+          </h4>
+        );
+      } else {
+        formattedLines.push(
+          <h5 key={i} className="font-semibold text-slate-800 mt-2 mb-1">
+            {headerText}
+          </h5>
+        );
+      }
+    }
+    // Handle bullet points (lines starting with - or *)
+    else if (line.match(/^[-*]\s/)) {
+      const bulletText = line.replace(/^[-*]\s*/, '');
+      formattedLines.push(
+        <li key={i} className="ml-4 text-slate-700 mb-1">
+          {formatInlineText(bulletText)}
+        </li>
+      );
+    }
+    // Regular paragraph
+    else {
+      formattedLines.push(
+        <p key={i} className="text-slate-700 mb-2 leading-relaxed">
+          {formatInlineText(line)}
+        </p>
+      );
+    }
+  }
+  
+  return <div className="space-y-1">{formattedLines}</div>;
+};
+
+// Helper to format inline text (URLs, bold, etc)
+const formatInlineText = (text: string) => {
+  // Convert URLs to links
+  const urlRegex = /(https?:\/\/[^\s<>"{}|^`[\]]+)/g;
+  const parts = text.split(urlRegex);
+  
+  return parts.map((part, i) => {
+    if (part.match(urlRegex)) {
+      return (
+        <a
+          key={i}
+          href={part}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-indigo-600 hover:underline"
+        >
+          {part}
+        </a>
+      );
+    }
+    return part;
+  });
+};
 
 const App: React.FC = () => {
   const [ticker, setTicker] = useState('AAPL');
@@ -211,7 +293,7 @@ const App: React.FC = () => {
                     selectsStart
                     startDate={startDate}
                     endDate={endDate}
-                    placeholderText="Start Date"
+                    placeholderText="Start (90D)"
                     className="pl-10 pr-4 py-2 bg-slate-100 border-transparent focus:bg-white focus:ring-2 focus:ring-indigo-500 rounded-lg outline-none w-full md:w-36 transition-all text-sm"
                     dateFormat="MMM d, yyyy"
                   />
@@ -225,7 +307,7 @@ const App: React.FC = () => {
                     startDate={startDate}
                     endDate={endDate}
                     minDate={startDate}
-                    placeholderText="End Date"
+                    placeholderText="End (Today)"
                     className="pl-10 pr-4 py-2 bg-slate-100 border-transparent focus:bg-white focus:ring-2 focus:ring-indigo-500 rounded-lg outline-none w-full md:w-36 transition-all text-sm"
                     dateFormat="MMM d, yyyy"
                   />
@@ -270,7 +352,7 @@ const App: React.FC = () => {
                     selectsStart
                     startDate={basketStartDate}
                     endDate={basketEndDate}
-                    placeholderText="Start Date"
+                    placeholderText="Start (90D)"
                     className="pl-10 pr-4 py-2 bg-slate-100 border-transparent focus:bg-white focus:ring-2 focus:ring-indigo-500 rounded-lg outline-none w-full md:w-36 transition-all text-sm"
                     dateFormat="MMM d, yyyy"
                   />
@@ -284,7 +366,7 @@ const App: React.FC = () => {
                     startDate={basketStartDate}
                     endDate={basketEndDate}
                     minDate={basketStartDate}
-                    placeholderText="End Date"
+                    placeholderText="End (Today)"
                     className="pl-10 pr-4 py-2 bg-slate-100 border-transparent focus:bg-white focus:ring-2 focus:ring-indigo-500 rounded-lg outline-none w-full md:w-36 transition-all text-sm"
                     dateFormat="MMM d, yyyy"
                   />
@@ -335,7 +417,50 @@ const App: React.FC = () => {
             )}
 
             {analysis && (
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+              <div className="space-y-6">
+                {/* Batch News Summary */}
+                {analysis.batch_news_summaries && analysis.batch_news_summaries.length > 0 && (
+                  <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                    <h3 className="text-lg font-bold flex items-center gap-2 mb-4">
+                      <MessageSquare className="text-indigo-600" />
+                      News Summary (Entire Period)
+                    </h3>
+                    <div className="space-y-4">
+                      {analysis.batch_news_summaries.map((summary, i) => (
+                        <div key={i} className="border-l-2 border-indigo-200 pl-4">
+                          <div className="flex items-center gap-2 mb-2">
+                            <span className="text-xs font-bold uppercase tracking-tighter text-indigo-600 bg-indigo-50 px-2 py-1 rounded">
+                              {summary.category}
+                            </span>
+                          </div>
+                          <div className="text-sm text-slate-700 leading-relaxed mb-2">
+                            {formatSummaryText(summary.ai_summary)}
+                          </div>
+                          {summary.sources && summary.sources.length > 0 && (
+                            <div className="text-xs text-slate-500">
+                              <span className="font-medium">Sources:</span>
+                              <div className="mt-1 space-y-1">
+                                {summary.sources.slice(0, 5).map((source, j) => (
+                                  <a
+                                    key={j}
+                                    href={source}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="block hover:text-indigo-600 hover:underline truncate"
+                                  >
+                                    {source}
+                                  </a>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                 {/* Left Column: Ticker Info & Summary */}
                 <div className="lg:col-span-1 space-y-6">
                   <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
@@ -449,6 +574,7 @@ const App: React.FC = () => {
                       <p className="text-slate-500">No major movements detected in this period.</p>
                     </div>
                   )}
+                </div>
                 </div>
               </div>
             )}
