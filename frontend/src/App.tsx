@@ -1,4 +1,6 @@
 import React, { useState } from 'react';
+import ReactDatePicker from 'react-datepicker';
+import 'react-datepicker/dist/react-datepicker.css';
 import { 
   Search, 
   TrendingUp, 
@@ -10,7 +12,8 @@ import {
   ChevronRight,
   ChevronDown,
   Loader2,
-  AlertCircle
+  AlertCircle,
+  X
 } from 'lucide-react';
 import { stockApi } from './api';
 import type { TickerAnalysis, StockMovement, NewsArticle, ChatMessage } from './api';
@@ -18,6 +21,8 @@ import { format } from 'date-fns';
 
 const App: React.FC = () => {
   const [ticker, setTicker] = useState('AAPL');
+  const [startDate, setStartDate] = useState<Date | null>(null);
+  const [endDate, setEndDate] = useState<Date | null>(null);
   const [analysis, setAnalysis] = useState<TickerAnalysis | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -35,7 +40,17 @@ const App: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      const data = await stockApi.getAnalysis(ticker.toUpperCase());
+      const params: {
+        start_date?: string;
+        end_date?: string;
+      } = {};
+      if (startDate) {
+        params.start_date = format(startDate, 'yyyy-MM-dd');
+      }
+      if (endDate) {
+        params.end_date = format(endDate, 'yyyy-MM-dd');
+      }
+      const data = await stockApi.getAnalysis(ticker.toUpperCase(), params);
       setAnalysis(data);
       setChatHistory([]); // Clear chat for new ticker
     } catch (err: unknown) {
@@ -49,6 +64,11 @@ const App: React.FC = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const clearDates = () => {
+    setStartDate(null);
+    setEndDate(null);
   };
 
   const handleChat = async (e: React.FormEvent) => {
@@ -90,7 +110,7 @@ const App: React.FC = () => {
             <h1 className="text-xl font-bold tracking-tight">Stock Analyzer</h1>
           </div>
           
-          <form onSubmit={handleSearch} className="flex gap-2">
+          <form onSubmit={handleSearch} className="flex flex-col md:flex-row gap-2 md:gap-3">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
               <input
@@ -98,8 +118,47 @@ const App: React.FC = () => {
                 value={ticker}
                 onChange={(e) => setTicker(e.target.value)}
                 placeholder="Enter Ticker (e.g. TSLA)"
-                className="pl-10 pr-4 py-2 bg-slate-100 border-transparent focus:bg-white focus:ring-2 focus:ring-indigo-500 rounded-lg outline-none w-full md:w-64 transition-all"
+                className="pl-10 pr-4 py-2 bg-slate-100 border-transparent focus:bg-white focus:ring-2 focus:ring-indigo-500 rounded-lg outline-none w-full md:w-40 transition-all"
               />
+            </div>
+            <div className="flex gap-2">
+              <div className="relative">
+                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4 pointer-events-none" />
+                <ReactDatePicker
+                  selected={startDate}
+                  onChange={(date) => setStartDate(date)}
+                  selectsStart
+                  startDate={startDate}
+                  endDate={endDate}
+                  placeholderText="Start Date"
+                  className="pl-10 pr-4 py-2 bg-slate-100 border-transparent focus:bg-white focus:ring-2 focus:ring-indigo-500 rounded-lg outline-none w-full md:w-36 transition-all text-sm"
+                  dateFormat="MMM d, yyyy"
+                />
+              </div>
+              <div className="relative">
+                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4 pointer-events-none" />
+                <ReactDatePicker
+                  selected={endDate}
+                  onChange={(date) => setEndDate(date)}
+                  selectsEnd
+                  startDate={startDate}
+                  endDate={endDate}
+                  minDate={startDate}
+                  placeholderText="End Date"
+                  className="pl-10 pr-4 py-2 bg-slate-100 border-transparent focus:bg-white focus:ring-2 focus:ring-indigo-500 rounded-lg outline-none w-full md:w-36 transition-all text-sm"
+                  dateFormat="MMM d, yyyy"
+                />
+              </div>
+              {(startDate || endDate) && (
+                <button
+                  type="button"
+                  onClick={clearDates}
+                  className="px-3 py-2 text-slate-500 hover:text-slate-700 hover:bg-slate-200 rounded-lg transition-colors"
+                  title="Clear dates"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
             </div>
             <button
               type="submit"
