@@ -12,7 +12,9 @@ News categories
 """
 
 import os
+import json
 import logging
+import re
 from datetime import date, datetime, timedelta
 from typing import List, Dict, Optional, Tuple
 
@@ -26,6 +28,117 @@ OPENAI_SEARCH_MODEL: str = os.getenv("OPENAI_SEARCH_MODEL", "gpt-5-search-api")
 # How many days before / after a movement to search for news
 DEFAULT_DAYS_BEFORE = 2
 DEFAULT_DAYS_AFTER = 1
+
+
+# ── Structured JSON prompt ────────────────────────────────────────────────────
+
+STRUCTURED_NEWS_SYSTEM_PROMPT = """\
+You are a financial research assistant with real-time web search access.
+Your task is to find news articles that explain a stock's price movements.
+
+You MUST respond ONLY with a valid JSON object — no markdown, no code blocks, no preamble.
+
+Required JSON format:
+{
+  "articles": [
+    {
+      "title": "Exact headline of the article",
+      "summary": "One sentence capturing the key investment takeaway",
+      "date": "YYYY-MM-DD",
+      "source_name": "Publication name (e.g. Bloomberg, Reuters, WSJ, CNBC)",
+      "url": "https://full-url-to-article",
+      "category": "company",
+      "relevance": "One sentence explaining why this likely impacted the stock price"
+    }
+  ]
+}
+
+Rules:
+- Return 5 to 10 of the most impactful articles ordered by date descending
+- category must be exactly one of: "company", "competitor", "macro"
+- date must be in YYYY-MM-DD format, or null if unknown
+- url must be a real, complete URL starting with https://, or null if unavailable
+- title, summary, and relevance must be non-empty strings
+- Do not include any text outside the JSON object
+"""
+
+
+def _parse_news_cards_from_response(content: str) -> List[Dict]:
+    """Parse structured news cards from an OpenAI JSON response."""
+    if not content:
+        return []
+
+    text = content.strip()
+    # Strip markdown code fences if the model wrapped the JSON
+    if text.startswith("```"):
+        text = re.sub(r'^```(?:json)?\n?', '', text)
+        text = re.sub(r'\n?```$', '', text)
+        text = text.strip()
+
+    try:
+        data = json.loads(text)
+        articles = data.get("articles", [])
+        if not isinstance(articles, list):
+            return []
+
+        validated: List[Dict] = []
+        for article in articles:
+            if not isinstance(article, dict):
+                continue
+            title = (article.get("title") or "").strip()
+            summary = (article.get("summary") or "").strip()
+            if not title or not summary:
+                logger.debug(f"Skipping article with missing title or summary: {article}")
+                continue
+
+            cat = article.get("category", "company")
+            if cat not in ("company", "competitor", "macro"):
+                cat = "company"
+
+            url = article.get("url") or None
+            if url and not url.startswith("http"):
+                url = None
+
+            # Normalize date to YYYY-MM-DD format
+            date_str = article.get("date")
+            if date_str:
+                parsed_date_str = date_str
+                try:
+                    # Try YYYY-MM-DD format first
+                    parsed_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+                    parsed_date_str = parsed_date.isoformat()
+                except ValueError:
+                    try:
+                        # Try other common formats
+                        for fmt in ("%B %d, %Y", "%d %B %Y", "%m/%d/%Y", "%Y/%m/%d"):
+                            try:
+                                parsed_date = datetime.strptime(date_str, fmt).date()
+                                parsed_date_str = parsed_date.isoformat()
+                                break
+                            except ValueError:
+                                continue
+                        else:
+                            # All formats failed
+                            logger.debug(f"Could not parse date '{date_str}', setting to None")
+                            parsed_date_str = None
+                    except Exception:
+                        logger.debug(f"Error parsing date '{date_str}', setting to None")
+                        parsed_date_str = None
+                date_str = parsed_date_str
+
+            validated.append({
+                "title": title,
+                "summary": summary,
+                "date": date_str,
+                "source_name": (article.get("source_name") or "").strip() or None,
+                "url": url,
+                "category": cat,
+                "relevance": (article.get("relevance") or "").strip() or None,
+            })
+        return validated
+    except (json.JSONDecodeError, KeyError, TypeError):
+        logger.warning("Failed to parse structured news cards from OpenAI response")
+        return []
 
 
 # ── Query builders ────────────────────────────────────────────────────────────
@@ -91,80 +204,74 @@ def _batch_search_with_openai(
     to_date: date,
     include_competitors: bool = False,
     include_macro: bool = False,
-) -> Dict[str, Tuple[str, List[str]]]:
+    movement_dates: Optional[List[date]] = None,
+) -> List[Dict]:
     """
-    Perform a single batch web search for a ticker across the entire date range.
-    This is much more efficient than searching per-movement.
-    
+    Perform a single structured batch web search for a ticker across the entire date range.
+
     Returns:
-        Dict mapping category to (ai_summary, sources) tuples
+        List of news card dicts with keys: title, summary, date, source_name, url, category, relevance
     """
     if not OPENAI_API_KEY:
         logger.debug("OpenAI API key not configured, returning empty results")
-        return {}
-    
+        return []
+
     try:
         client = OpenAI(api_key=OPENAI_API_KEY)
-        
-        # Build a comprehensive search prompt for the entire period
-        prompt_parts = [
-            f"Find and summarize all major news about {company_name} ({ticker}) "
-            f"between {from_date.isoformat()} and {to_date.isoformat()}. "
-            f"Focus on events that could explain significant stock price movements: "
-            f"earnings reports, product launches, executive changes, lawsuits, "
-            f"regulatory actions, or major announcements."
+
+        categories = [
+            "company-specific events (earnings, product launches, executive changes, "
+            "lawsuits, regulatory actions, analyst upgrades/downgrades)"
         ]
-        
         if include_competitors:
-            prompt_parts.append(
-                " Also include competitor and industry news that could impact the stock."
+            categories.append(
+                "competitor and industry developments (competitor earnings, M&A, "
+                "market share changes, sector-wide trends)"
             )
-        
         if include_macro:
-            prompt_parts.append(
-                " Also include major macroeconomic events (Fed decisions, interest rates, "
-                "inflation, geopolitical events) that could impact stock markets."
+            categories.append(
+                "macroeconomic events (Federal Reserve decisions, interest rate changes, "
+                "inflation data, GDP reports, geopolitical events)"
             )
-        
-        prompt_parts.append(
-            " Provide a comprehensive summary organized by date, with direct source URLs. "
-            "Focus on the most impactful news events."
-        )
-        
+
+        categories_str = "; ".join(categories)
+
+        # Build prompt with priority dates
+        prompt_parts = [
+            f"Find the most impactful news articles about {company_name} ({ticker}) "
+            f"published between {from_date.isoformat()} and {to_date.isoformat()}. "
+            f"Cover: {categories_str}. "
+            f"Focus on news that would explain significant stock price movements."
+        ]
+
+        if movement_dates:
+            date_strs = [d.isoformat() for d in movement_dates]
+            prompt_parts.append(
+                f" CRITICAL: Prioritize finding at least one article for each of these major movement dates: "
+                f"{', '.join(date_strs)}. These are the days with the largest stock price swings."
+            )
+
         prompt = " ".join(prompt_parts)
-        
+
         response = client.chat.completions.create(
             model=OPENAI_SEARCH_MODEL,
             messages=[
-                {
-                    "role": "system",
-                    "content": "You are a financial research assistant. Search for and summarize relevant news articles across a time period. Always include direct source URLs in your response. Organize by date and focus on the most impactful events."
-                },
-                {
-                    "role": "user",
-                    "content": prompt
-                }
+                {"role": "system", "content": STRUCTURED_NEWS_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
             ],
         )
-        
-        ai_summary = response.choices[0].message.content or ""
-        
-        # Extract sources
-        import re
-        url_pattern = r'https?://[^\s<>"{}|\\^`\[\]]+'
-        urls = list(set(re.findall(url_pattern, ai_summary)))
-        
-        # Return as a single "company" category summary
-        return {
-            "company": (ai_summary, urls)
-        }
-        
+
+        content = response.choices[0].message.content or ""
+        cards = _parse_news_cards_from_response(content)
+        logger.debug(f"Structured batch search returned {len(cards)} news cards for {ticker}")
+        return cards
+
     except OpenAIError as e:
         logger.error(f"OpenAI batch web search failed: {e}")
-        return {}
+        return []
     except Exception as e:
         logger.error(f"Unexpected error in batch web search: {e}")
-        return {}
+        return []
 
 
 def _search_with_openai(
@@ -199,16 +306,15 @@ def _search_with_openai(
                 }
             ],
         )
-        
+
         ai_summary = response.choices[0].message.content or ""
-        
+
         # Extract sources from the response if available
         sources = []
         search_queries = []
-        
+
         # Search models typically include citations in the response
         # We'll parse URLs from the summary as a fallback
-        import re
         url_pattern = r'https?://[^\s<>"{}|\\^`\[\]]+'
         urls = re.findall(url_pattern, ai_summary)
         sources = list(set(urls))  # Deduplicate
@@ -237,48 +343,38 @@ def fetch_batch_news_for_period(
     to_date: date,
     include_competitors: bool = False,
     include_macro: bool = False,
+    movement_dates: Optional[List[date]] = None,
 ) -> List[Dict]:
     """
-    Fetch news summaries for an entire date range in a single batch query.
-    This is much more efficient than per-movement queries and avoids rate limits.
-    
+    Fetch structured news cards for an entire date range in a single batch query.
+
     Returns:
-        List of summary dictionaries with 'category', 'ai_summary', 'sources'
+        List of news card dicts with keys: title, summary, date, source_name,
+        url, category, relevance
     """
     if not OPENAI_API_KEY:
         logger.warning("OpenAI API key not configured, cannot fetch news summaries")
         return []
-    
+
     if not company_name or not ticker:
         logger.error("company_name and ticker are required for news fetching")
         return []
-    
+
     if from_date > to_date:
         logger.error(f"Invalid date range: from_date {from_date} > to_date {to_date}")
         return []
-    
-    logger.debug(f"Fetching batch news for {ticker} from {from_date} to {to_date}")
-    
-    results = _batch_search_with_openai(
+
+    logger.debug(f"Fetching structured news cards for {ticker} from {from_date} to {to_date}")
+
+    return _batch_search_with_openai(
         company_name=company_name,
         ticker=ticker,
         from_date=from_date,
         to_date=to_date,
         include_competitors=include_competitors,
         include_macro=include_macro,
+        movement_dates=movement_dates,
     )
-    
-    summaries = []
-    for category, (ai_summary, sources) in results.items():
-        if ai_summary:
-            summaries.append({
-                "category": category,
-                "ai_summary": ai_summary,
-                "sources": sources,
-                "search_queries": [],
-            })
-    
-    return summaries
 
 
 def fetch_news_summaries_for_movement(

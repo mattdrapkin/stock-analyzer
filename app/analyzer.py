@@ -6,9 +6,9 @@ the TickerAnalysis response consumed by the REST API.
 import time
 import logging
 from datetime import date, timedelta
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-from .models import NewsArticle, NewsCategory, NewsSearchSummary, StockMovement, TickerAnalysis
+from .models import NewsArticle, NewsCard, NewsCategory, NewsSearchSummary, StockMovement, TickerAnalysis
 from .stock_data import (
     detect_major_movements,
     fetch_price_history,
@@ -61,6 +61,24 @@ def _to_news_summary(raw: Dict) -> NewsSearchSummary:
     )
 
 
+def _to_news_card(raw: Dict) -> NewsCard:
+    """Convert raw card dict to NewsCard model."""
+    cat_str = raw.get("category", "company")
+    try:
+        cat = NewsCategory(cat_str)
+    except ValueError:
+        cat = NewsCategory.COMPANY
+    return NewsCard(
+        title=raw.get("title", ""),
+        summary=raw.get("summary", ""),
+        date=raw.get("date") or None,
+        source_name=raw.get("source_name") or None,
+        url=raw.get("url") or None,
+        category=cat,
+        relevance=raw.get("relevance") or None,
+    )
+
+
 def _to_news_article(raw: Dict, fallback_category: str = "company") -> NewsArticle:
     """Convert raw article dict to NewsArticle model (for backward compatibility)."""
     cat_str = raw.get("category", fallback_category)
@@ -100,6 +118,7 @@ def build_analysis(
     cache_key = (
         f"{ticker.upper()}|{start_date}|{end_date}|{min_movement_pct}"
         f"|{include_competitors}|{include_macro}|{max_articles_per_category}"
+        "|v2"  # Version for batch_news_cards format
     )
     cached = _cache_get(cache_key, cache_ttl)
     if cached is not None:
@@ -128,19 +147,38 @@ def build_analysis(
 
     # 4. Build StockMovement objects with attached news
     movements = []
-    batch_summaries: List[NewsSearchSummary] = []
-    
+    batch_cards: List[NewsCard] = []
+
     if use_web_search:
         # Use batch web search for entire date range (much more efficient)
-        raw_summaries = fetch_batch_news_for_period(
+        # Extract major movement dates to prioritize in search
+        movement_dates = [m["date"] for m in raw_movements]
+
+        raw_cards = fetch_batch_news_for_period(
             company_name=company_name,
             ticker=ticker,
             from_date=start_date,
             to_date=end_date,
             include_competitors=include_competitors,
             include_macro=include_macro,
+            movement_dates=movement_dates,
         )
-        batch_summaries = [_to_news_summary(s) for s in raw_summaries]
+
+        # Build date -> change_pct lookup from full df (all days, not just major movers)
+        df_copy = df.copy()
+        df_copy["change_pct"] = ((df_copy["Close"] - df_copy["Open"]) / df_copy["Open"]) * 100
+        date_to_change_pct = {
+            str(idx.date()): round(float(row["change_pct"]), 2)
+            for idx, row in df_copy.iterrows()
+        }
+
+        # Attach swing_pct to each card
+        batch_cards = []
+        for card in raw_cards:
+            news_card = _to_news_card(card)
+            if news_card.date and news_card.date in date_to_change_pct:
+                news_card = news_card.model_copy(update={"swing_pct": date_to_change_pct[news_card.date]})
+            batch_cards.append(news_card)
         
         # Attach batch summary to TickerAnalysis level, not per movement
         for raw in raw_movements:
@@ -208,7 +246,8 @@ def build_analysis(
         movements=movements,
         news_source=news_source,
         news_note=news_note,
-        batch_news_summaries=batch_summaries,
+        batch_news_summaries=[],
+        batch_news_cards=batch_cards,
     )
 
     _cache_set(cache_key, result)

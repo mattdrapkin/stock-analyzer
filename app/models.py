@@ -34,6 +34,17 @@ class NewsSearchSummary(BaseModel):
     search_queries: List[str] = []
 
 
+class NewsCard(BaseModel):
+    title: str
+    summary: str
+    date: Optional[str] = None  # YYYY-MM-DD string
+    source_name: Optional[str] = None
+    url: Optional[str] = None
+    category: NewsCategory = NewsCategory.COMPANY
+    relevance: Optional[str] = None  # one sentence on why it affected the stock
+    swing_pct: Optional[float] = None  # stock's daily % change on this date
+
+
 class StockMovement(BaseModel):
     date: date
     open: float
@@ -61,7 +72,8 @@ class TickerAnalysis(BaseModel):
     movements: List[StockMovement]
     news_source: str  # which news source was used
     news_note: Optional[str] = None  # any caveats about news availability/coverage
-    batch_news_summaries: List[NewsSearchSummary] = []  # News summaries for entire period
+    batch_news_summaries: List[NewsSearchSummary] = []  # News summaries for entire period (legacy)
+    batch_news_cards: List[NewsCard] = []  # Structured news cards for entire period
 
 
 class ChatMessage(BaseModel):

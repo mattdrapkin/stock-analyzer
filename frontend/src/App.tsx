@@ -14,93 +14,13 @@ import {
   Loader2,
   AlertCircle,
   X,
-  Layers
+  Layers,
+  Newspaper
 } from 'lucide-react';
 import { stockApi } from './api';
-import type { TickerAnalysis, StockMovement, NewsArticle, ChatMessage, BasketAnalysisResponse, BasketTickerResult, NewsSearchSummary } from './api';
+import type { TickerAnalysis, StockMovement, NewsCard, ChatMessage, BasketAnalysisResponse, BasketTickerResult } from './api';
 import { format } from 'date-fns';
-
-// Helper function to format AI summary text with basic markdown-like formatting
-const formatSummaryText = (text: string) => {
-  if (!text) return null;
-  
-  const lines = text.split('\n');
-  const formattedLines: React.ReactNode[] = [];
-  
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
-    
-    // Handle headers (lines starting with #)
-    if (line.startsWith('#')) {
-      const headerText = line.replace(/^#+\s*/, '');
-      const level = line.match(/^#+/)?.[0].length || 1;
-      const headerLevel = Math.min(level + 2, 6);
-      if (headerLevel === 3) {
-        formattedLines.push(
-          <h3 key={i} className="font-bold text-slate-800 mt-4 mb-2">
-            {headerText}
-          </h3>
-        );
-      } else if (headerLevel === 4) {
-        formattedLines.push(
-          <h4 key={i} className="font-semibold text-slate-800 mt-3 mb-2">
-            {headerText}
-          </h4>
-        );
-      } else {
-        formattedLines.push(
-          <h5 key={i} className="font-semibold text-slate-800 mt-2 mb-1">
-            {headerText}
-          </h5>
-        );
-      }
-    }
-    // Handle bullet points (lines starting with - or *)
-    else if (line.match(/^[-*]\s/)) {
-      const bulletText = line.replace(/^[-*]\s*/, '');
-      formattedLines.push(
-        <li key={i} className="ml-4 text-slate-700 mb-1">
-          {formatInlineText(bulletText)}
-        </li>
-      );
-    }
-    // Regular paragraph
-    else {
-      formattedLines.push(
-        <p key={i} className="text-slate-700 mb-2 leading-relaxed">
-          {formatInlineText(line)}
-        </p>
-      );
-    }
-  }
-  
-  return <div className="space-y-1">{formattedLines}</div>;
-};
-
-// Helper to format inline text (URLs, bold, etc)
-const formatInlineText = (text: string) => {
-  // Convert URLs to links
-  const urlRegex = /(https?:\/\/[^\s<>"{}|^`[\]]+)/g;
-  const parts = text.split(urlRegex);
-  
-  return parts.map((part, i) => {
-    if (part.match(urlRegex)) {
-      return (
-        <a
-          key={i}
-          href={part}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-indigo-600 hover:underline"
-        >
-          {part}
-        </a>
-      );
-    }
-    return part;
-  });
-};
+import Sidebar, { type Section } from './components/Sidebar';
 
 const App: React.FC = () => {
   const [ticker, setTicker] = useState('AAPL');
@@ -125,6 +45,56 @@ const App: React.FC = () => {
   const [basketLoading, setBasketLoading] = useState(false);
   const [basketError, setBasketError] = useState<string | null>(null);
 
+  // Collapsible sections state
+  const [holisticSummaryExpanded, setHolisticSummaryExpanded] = useState(true);
+  const [newsHighlightsExpanded, setNewsHighlightsExpanded] = useState(true);
+  const [tickerInfoExpanded, setTickerInfoExpanded] = useState(true);
+  const [chatExpanded, setChatExpanded] = useState(true);
+  const [holisticSummary, setHolisticSummary] = useState<string | null>(null);
+
+  // Sidebar state
+  const [activeSection, setActiveSection] = useState<string>('');
+
+  // Define sidebar sections based on view mode and data
+  const sidebarSections: Section[] = [
+    {
+      id: 'holistic-summary',
+      label: 'Holistic Summary',
+      icon: Info,
+      visible: viewMode === 'single' && !!holisticSummary
+    },
+    {
+      id: 'news-highlights',
+      label: 'News Highlights',
+      icon: Newspaper,
+      visible: viewMode === 'single' && analysis?.batch_news_cards && analysis.batch_news_cards.length > 0
+    },
+    {
+      id: 'ticker-info',
+      label: 'Ticker Info',
+      icon: Info,
+      visible: viewMode === 'single' && !!analysis
+    },
+    {
+      id: 'ai-assistant',
+      label: 'AI Assistant',
+      icon: MessageSquare,
+      visible: viewMode === 'single' && !!analysis
+    },
+    {
+      id: 'movements',
+      label: 'Significant Movements',
+      icon: TrendingUp,
+      visible: viewMode === 'single' && !!analysis
+    },
+    {
+      id: 'basket-performance',
+      label: 'Basket Performance',
+      icon: Layers,
+      visible: viewMode === 'basket' && !!basketAnalysis
+    }
+  ];
+
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!ticker) return;
@@ -145,6 +115,20 @@ const App: React.FC = () => {
       const data = await stockApi.getAnalysis(ticker.toUpperCase(), params);
       setAnalysis(data);
       setChatHistory([]); // Clear chat for new ticker
+      setHolisticSummary(null); // Clear previous summary
+      
+      // Auto-fetch holistic summary
+      try {
+        const summaryResponse = await stockApi.chat(ticker, {
+          message: 'Provide a holistic summary of what drove this stock\'s movements over the entire time period.',
+          history: []
+        });
+        setHolisticSummary(summaryResponse.response);
+      } catch (err) {
+        // Log error and fail gracefully if summary fetch fails
+        console.error('Failed to fetch holistic summary:', err);
+        setHolisticSummary(null);
+      }
     } catch (err: unknown) {
       if (err && typeof err === 'object' && 'response' in err) {
         const axiosError = err as { response: { data: { detail: string } } };
@@ -235,8 +219,15 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
+      {/* Sidebar */}
+      <Sidebar
+        sections={sidebarSections}
+        activeSection={activeSection}
+        onSectionClick={setActiveSection}
+      />
+
       {/* Header */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-10">
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-10 lg:pl-64">
         <div className="max-w-6xl mx-auto px-4 py-4">
           {/* Logo and View Toggle */}
           <div className="flex items-center justify-between mb-4">
@@ -394,7 +385,7 @@ const App: React.FC = () => {
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto px-4 py-8">
+      <main className="max-w-6xl mx-auto px-4 py-8 lg:pl-64">
         {viewMode === 'single' ? (
           <>
             {error && (
@@ -418,145 +409,151 @@ const App: React.FC = () => {
 
             {analysis && (
               <div className="space-y-6">
-                {/* Batch News Summary */}
-                {analysis.batch_news_summaries && analysis.batch_news_summaries.length > 0 && (
-                  <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-                    <h3 className="text-lg font-bold flex items-center gap-2 mb-4">
-                      <MessageSquare className="text-indigo-600" />
-                      News Summary (Entire Period)
-                    </h3>
-                    <div className="space-y-4">
-                      {analysis.batch_news_summaries.map((summary, i) => (
-                        <div key={i} className="border-l-2 border-indigo-200 pl-4">
-                          <div className="flex items-center gap-2 mb-2">
-                            <span className="text-xs font-bold uppercase tracking-tighter text-indigo-600 bg-indigo-50 px-2 py-1 rounded">
-                              {summary.category}
-                            </span>
-                          </div>
-                          <div className="text-sm text-slate-700 leading-relaxed mb-2">
-                            {formatSummaryText(summary.ai_summary)}
-                          </div>
-                          {summary.sources && summary.sources.length > 0 && (
-                            <div className="text-xs text-slate-500">
-                              <span className="font-medium">Sources:</span>
-                              <div className="mt-1 space-y-1">
-                                {summary.sources.slice(0, 5).map((source, j) => (
-                                  <a
-                                    key={j}
-                                    href={source}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="block hover:text-indigo-600 hover:underline truncate"
-                                  >
-                                    {source}
-                                  </a>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
+                {/* Holistic Summary */}
+                {holisticSummary && (
+                  <div id="holistic-summary">
+                    <CollapsibleSection
+                      title="Holistic Summary"
+                      icon={Info}
+                      expanded={holisticSummaryExpanded}
+                      onToggle={() => setHolisticSummaryExpanded(!holisticSummaryExpanded)}
+                    >
+                      <div className="prose prose-slate max-w-none">
+                        <p className="text-slate-700 leading-relaxed whitespace-pre-wrap">{holisticSummary}</p>
+                      </div>
+                    </CollapsibleSection>
+                  </div>
+                )}
+
+                {/* Batch News Cards */}
+                {analysis.batch_news_cards && analysis.batch_news_cards.length > 0 && (
+                  <div id="news-highlights">
+                    <CollapsibleSection
+                      title="News Highlights"
+                      icon={Newspaper}
+                      expanded={newsHighlightsExpanded}
+                      onToggle={() => setNewsHighlightsExpanded(!newsHighlightsExpanded)}
+                      badge={`${analysis.batch_news_cards.length} articles`}
+                    >
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        {analysis.batch_news_cards.map((card, i) => (
+                          <NewsCardItem key={i} card={card} />
+                        ))}
+                      </div>
+                    </CollapsibleSection>
                   </div>
                 )}
 
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                 {/* Left Column: Ticker Info & Summary */}
                 <div className="lg:col-span-1 space-y-6">
-                  <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-                    <div className="flex justify-between items-start mb-4">
-                      <div>
-                        <h2 className="text-3xl font-bold">{analysis.ticker}</h2>
-                        <p className="text-slate-500 font-medium">{analysis.company_name}</p>
+                  <div id="ticker-info">
+                    <CollapsibleSection
+                      title="Ticker Info"
+                      icon={Info}
+                      expanded={tickerInfoExpanded}
+                      onToggle={() => setTickerInfoExpanded(!tickerInfoExpanded)}
+                    >
+                      <div className="flex justify-between items-start mb-4">
+                        <div>
+                          <h2 className="text-3xl font-bold">{analysis.ticker}</h2>
+                          <p className="text-slate-500 font-medium">{analysis.company_name}</p>
+                        </div>
+                        <div className="bg-slate-100 px-3 py-1 rounded-full text-xs font-bold text-slate-600 uppercase tracking-wider">
+                          {analysis.sector || 'N/A'}
+                        </div>
                       </div>
-                      <div className="bg-slate-100 px-3 py-1 rounded-full text-xs font-bold text-slate-600 uppercase tracking-wider">
-                        {analysis.sector || 'N/A'}
+                      
+                      <div className="grid grid-cols-2 gap-4 mt-6">
+                        <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-100">
+                          <p className="text-emerald-600 text-xs font-bold uppercase mb-1">Up Days</p>
+                          <p className="text-2xl font-bold text-emerald-700">{analysis.up_movements}</p>
+                        </div>
+                        <div className="bg-rose-50 p-3 rounded-xl border border-rose-100">
+                          <p className="text-rose-600 text-xs font-bold uppercase mb-1">Down Days</p>
+                          <p className="text-2xl font-bold text-rose-700">{analysis.down_movements}</p>
+                        </div>
                       </div>
-                    </div>
-                    
-                    <div className="grid grid-cols-2 gap-4 mt-6">
-                      <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-100">
-                        <p className="text-emerald-600 text-xs font-bold uppercase mb-1">Up Days</p>
-                        <p className="text-2xl font-bold text-emerald-700">{analysis.up_movements}</p>
-                      </div>
-                      <div className="bg-rose-50 p-3 rounded-xl border border-rose-100">
-                        <p className="text-rose-600 text-xs font-bold uppercase mb-1">Down Days</p>
-                        <p className="text-2xl font-bold text-rose-700">{analysis.down_movements}</p>
-                      </div>
-                    </div>
 
-                    <div className="mt-6 pt-6 border-t border-slate-100">
-                      <div className="flex items-center justify-between text-sm text-slate-500 mb-2">
-                        <span className="flex items-center gap-1.5"><Calendar className="w-4 h-4" /> Period</span>
-                        <span className="font-medium text-slate-700">
-                          {format(new Date(analysis.period_start), 'MMM d')} - {format(new Date(analysis.period_end), 'MMM d, yyyy')}
-                        </span>
+                      <div className="mt-6 pt-6 border-t border-slate-100">
+                        <div className="flex items-center justify-between text-sm text-slate-500 mb-2">
+                          <span className="flex items-center gap-1.5"><Calendar className="w-4 h-4" /> Period</span>
+                          <span className="font-medium text-slate-700">
+                            {format(new Date(analysis.period_start), 'MMM d')} - {format(new Date(analysis.period_end), 'MMM d, yyyy')}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between text-sm text-slate-500">
+                          <span className="flex items-center gap-1.5"><TrendingUp className="w-4 h-4" /> Threshold</span>
+                          <span className="font-medium text-slate-700">±{analysis.min_movement_pct}%</span>
+                        </div>
                       </div>
-                      <div className="flex items-center justify-between text-sm text-slate-500">
-                        <span className="flex items-center gap-1.5"><TrendingUp className="w-4 h-4" /> Threshold</span>
-                        <span className="font-medium text-slate-700">±{analysis.min_movement_pct}%</span>
-                      </div>
-                    </div>
+                    </CollapsibleSection>
                   </div>
 
                   {/* Chat Interface (Desktop) */}
-                  <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden hidden lg:flex flex-col h-[500px]">
-                    <div className="bg-slate-50 p-4 border-b border-slate-200 flex items-center gap-2">
-                      <MessageSquare className="w-5 h-5 text-indigo-600" />
-                      <h3 className="font-bold">AI Stock Assistant</h3>
-                    </div>
-                    
-                    <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                      {chatHistory.length === 0 ? (
-                        <div className="text-center py-8">
-                          <p className="text-sm text-slate-400">Ask about {analysis.ticker}'s movements...</p>
-                        </div>
-                      ) : (
-                        chatHistory.map((msg, i) => (
-                          <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                            <div className={`max-w-[85%] p-3 rounded-2xl text-sm ${
-                              msg.role === 'user' 
-                                ? 'bg-indigo-600 text-white rounded-tr-none' 
-                                : 'bg-slate-100 text-slate-800 rounded-tl-none'
-                            }`}>
-                              {msg.content}
+                  <div id="ai-assistant">
+                    <CollapsibleSection
+                      title="AI Stock Assistant"
+                      icon={MessageSquare}
+                      expanded={chatExpanded}
+                      onToggle={() => setChatExpanded(!chatExpanded)}
+                      className="hidden lg:flex"
+                    >
+                      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden flex flex-col h-[500px]">
+                      
+                      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                        {chatHistory.length === 0 ? (
+                          <div className="text-center py-8">
+                            <p className="text-sm text-slate-400">Ask about {analysis.ticker}'s movements...</p>
+                          </div>
+                        ) : (
+                          chatHistory.map((msg, i) => (
+                            <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                              <div className={`max-w-[85%] p-3 rounded-2xl text-sm ${
+                                msg.role === 'user' 
+                                  ? 'bg-indigo-600 text-white rounded-tr-none' 
+                                  : 'bg-slate-100 text-slate-800 rounded-tl-none'
+                              }`}>
+                                {msg.content}
+                              </div>
+                            </div>
+                          ))
+                        )}
+                        {chatLoading && (
+                          <div className="flex justify-start">
+                            <div className="bg-slate-100 p-3 rounded-2xl rounded-tl-none">
+                              <Loader2 className="w-4 h-4 animate-spin text-slate-400" />
                             </div>
                           </div>
-                        ))
-                      )}
-                      {chatLoading && (
-                        <div className="flex justify-start">
-                          <div className="bg-slate-100 p-3 rounded-2xl rounded-tl-none">
-                            <Loader2 className="w-4 h-4 animate-spin text-slate-400" />
-                          </div>
-                        </div>
-                      )}
-                    </div>
-
-                    <form onSubmit={handleChat} className="p-4 bg-white border-t border-slate-100">
-                      <div className="flex gap-2">
-                        <input
-                          type="text"
-                          value={chatMessage}
-                          onChange={(e) => setChatMessage(e.target.value)}
-                          placeholder="Ask why it moved..."
-                          className="flex-1 bg-slate-50 border-none rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
-                        />
-                        <button 
-                          type="submit" 
-                          disabled={chatLoading || !chatMessage}
-                          className="bg-indigo-600 text-white p-2 rounded-lg disabled:opacity-50"
-                          title="Send message"
-                        >
-                          <ChevronRight className="w-4 h-4" />
-                        </button>
+                        )}
                       </div>
-                    </form>
+
+                        <form onSubmit={handleChat} className="p-4 bg-white border-t border-slate-100">
+                          <div className="flex gap-2">
+                            <input
+                              type="text"
+                              value={chatMessage}
+                              onChange={(e) => setChatMessage(e.target.value)}
+                              placeholder="Ask why it moved..."
+                              className="flex-1 bg-slate-50 border-none rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                            />
+                            <button 
+                              type="submit" 
+                              disabled={chatLoading || !chatMessage}
+                              className="bg-indigo-600 text-white p-2 rounded-lg disabled:opacity-50"
+                              title="Send message"
+                            >
+                              <ChevronRight className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </form>
+                      </div>
+                    </CollapsibleSection>
                   </div>
                 </div>
 
                 {/* Right Column: Movements Timeline */}
-                <div className="lg:col-span-2 space-y-4">
+                <div id="movements" className="lg:col-span-2 space-y-4">
                   <h3 className="text-lg font-bold flex items-center gap-2 mb-4">
                     Significant Movements
                     <span className="bg-slate-200 text-slate-600 text-xs px-2 py-0.5 rounded-full">
@@ -565,7 +562,7 @@ const App: React.FC = () => {
                   </h3>
 
                   {analysis.movements.map((move, i) => (
-                    <MovementCard key={i} move={move} />
+                    <MovementCard key={i} move={move} batchNewsCards={analysis.batch_news_cards} />
                   ))}
 
                   {analysis.total_movements === 0 && (
@@ -602,7 +599,7 @@ const App: React.FC = () => {
 
             {basketAnalysis && (
               <div className="space-y-6">
-                <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                <div id="basket-performance" className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
                   <div className="flex items-center justify-between mb-6">
                     <div>
                       <h2 className="text-2xl font-bold">Basket Performance</h2>
@@ -648,9 +645,13 @@ const App: React.FC = () => {
   );
 };
 
-const MovementCard: React.FC<{ move: StockMovement }> = ({ move }) => {
+const MovementCard: React.FC<{ move: StockMovement; batchNewsCards?: NewsCard[] }> = ({ move, batchNewsCards }) => {
   const [expanded, setExpanded] = useState(false);
   const isUp = move.direction === 'up';
+
+  // Filter news cards for this specific date (use local timezone to match backend)
+  const moveDateStr = new Date(move.date).toLocaleDateString('en-CA');
+  const cardsForDay = batchNewsCards?.filter(card => card.date === moveDateStr) || [];
 
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden transition-all hover:shadow-md">
@@ -693,14 +694,14 @@ const MovementCard: React.FC<{ move: StockMovement }> = ({ move }) => {
       {expanded && (
         <div className="px-4 pb-6 md:px-6 md:pb-8 border-t border-slate-50 pt-6">
           <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4">Related News</h4>
-          <div className="space-y-4">
-            {move.news.length > 0 ? (
-              move.news.map((article, j) => (
-                <NewsItem key={j} article={article} />
+          <div className="space-y-3">
+            {cardsForDay.length > 0 ? (
+              cardsForDay.map((card, j) => (
+                <NewsCardItem key={j} card={card} />
               ))
             ) : (
-              <div className="bg-slate-50 p-4 rounded-xl text-center">
-                <p className="text-sm text-slate-500 italic">No specific news articles found for this date.</p>
+              <div className="bg-slate-50 p-4 rounded-xl text-center border border-dashed border-slate-200">
+                <p className="text-sm text-slate-400">No specific news articles found for this date.</p>
               </div>
             )}
           </div>
@@ -710,29 +711,76 @@ const MovementCard: React.FC<{ move: StockMovement }> = ({ move }) => {
   );
 };
 
-const NewsItem: React.FC<{ article: NewsArticle }> = ({ article }) => {
-  return (
-    <div className="group border-l-2 border-indigo-100 hover:border-indigo-500 pl-4 transition-colors">
-      <div className="flex items-center gap-2 mb-1">
-        <span className="text-[10px] font-bold uppercase tracking-tighter text-indigo-500 bg-indigo-50 px-1.5 py-0.5 rounded">
-          {article.category}
-        </span>
-        <span className="text-xs font-medium text-slate-400">{article.source}</span>
+const categoryConfig = {
+  company: { bg: 'bg-indigo-50 text-indigo-700 border-indigo-100', label: 'Company' },
+  competitor: { bg: 'bg-amber-50 text-amber-700 border-amber-100', label: 'Competitor' },
+  macro: { bg: 'bg-emerald-50 text-emerald-700 border-emerald-100', label: 'Macro' },
+} as const;
+
+const NewsCardItem: React.FC<{ card: NewsCard }> = ({ card }) => {
+  const cfg = categoryConfig[card.category] ?? { bg: 'bg-slate-50 text-slate-600 border-slate-100', label: card.category };
+
+  const inner = (
+    <div className={`group h-full bg-white border border-slate-200 rounded-xl p-4 transition-all hover:shadow-md hover:border-indigo-200 flex flex-col gap-2 ${
+      card.url ? 'cursor-pointer' : ''
+    }`}>
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border ${cfg.bg}`}>
+            {cfg.label}
+          </span>
+          {card.source_name && (
+            <span className="text-xs text-slate-400 font-medium">{card.source_name}</span>
+          )}
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {card.swing_pct !== undefined && card.swing_pct !== null && (
+            <span className={`text-xs font-bold px-2 py-0.5 rounded ${
+              card.swing_pct > 0
+                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                : card.swing_pct < 0
+                ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                : 'bg-slate-50 text-slate-600 border border-slate-200'
+            }`}>
+              {card.swing_pct > 0 ? '+' : ''}{card.swing_pct.toFixed(1)}%
+            </span>
+          )}
+          {card.date && (
+            <span className="text-xs text-slate-400 whitespace-nowrap flex items-center gap-1">
+              <Calendar className="w-3 h-3" />
+              {card.date}
+            </span>
+          )}
+        </div>
       </div>
-      <a 
-        href={article.url || '#'} 
-        target="_blank" 
-        rel="noopener noreferrer"
-        className="text-slate-800 font-semibold leading-snug group-hover:text-indigo-600 transition-colors flex items-start gap-1"
-      >
-        {article.title}
-        {article.url && <ExternalLink className="w-3 h-3 mt-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" />}
-      </a>
-      {article.summary && (
-        <p className="text-sm text-slate-500 mt-1 line-clamp-2">{article.summary}</p>
+
+      <h4 className={`font-semibold text-slate-900 leading-snug ${
+        card.url ? 'group-hover:text-indigo-600 transition-colors' : ''
+      }`}>
+        {card.title}
+        {card.url && (
+          <ExternalLink className="w-3 h-3 inline ml-1 opacity-0 group-hover:opacity-100 transition-opacity" />
+        )}
+      </h4>
+
+      <p className="text-sm text-slate-600 leading-relaxed flex-1">{card.summary}</p>
+
+      {card.relevance && (
+        <p className="text-xs text-slate-400 italic border-t border-slate-100 pt-2 mt-auto">
+          {card.relevance}
+        </p>
       )}
     </div>
   );
+
+  if (card.url) {
+    return (
+      <a href={card.url} target="_blank" rel="noopener noreferrer" className="block h-full">
+        {inner}
+      </a>
+    );
+  }
+  return inner;
 };
 
 const BasketResultCard: React.FC<{ result: BasketTickerResult; rank: number }> = ({ result, rank }) => {
@@ -771,4 +819,52 @@ const BasketResultCard: React.FC<{ result: BasketTickerResult; rank: number }> =
 };
 
 export default App;
+
+// Collapsible Section Component
+interface CollapsibleSectionProps {
+  title: string;
+  icon: React.ComponentType<{ className?: string }>;
+  expanded: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+  badge?: string;
+  className?: string;
+}
+
+const CollapsibleSection: React.FC<CollapsibleSectionProps> = ({ 
+  title, 
+  icon: Icon, 
+  expanded, 
+  onToggle, 
+  children, 
+  badge,
+  className = ''
+}) => {
+  return (
+    <div className={`bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden ${className}`}>
+      <button
+        onClick={onToggle}
+        className="w-full p-4 md:p-6 flex items-center justify-between gap-4 hover:bg-slate-50 transition-colors text-left"
+      >
+        <div className="flex items-center gap-3">
+          <Icon className="text-indigo-600 w-5 h-5" />
+          <h3 className="text-lg font-bold">{title}</h3>
+          {badge && (
+            <span className="text-xs font-normal text-slate-400 bg-slate-100 px-2.5 py-1 rounded-full">
+              {badge}
+            </span>
+          )}
+        </div>
+        <div className={`p-2 rounded-full transition-transform ${expanded ? 'rotate-180 bg-slate-100' : 'text-slate-400'}`}>
+          <ChevronDown className="w-5 h-5" />
+        </div>
+      </button>
+      {expanded && (
+        <div className="px-4 pb-6 md:px-6 md:pb-8 border-t border-slate-50 pt-6">
+          {children}
+        </div>
+      )}
+    </div>
+  );
+};
 

@@ -22,6 +22,17 @@ export interface NewsSearchSummary {
   search_queries: string[];
 }
 
+export interface NewsCard {
+  title: string;
+  summary: string;
+  date?: string;
+  source_name?: string;
+  url?: string;
+  category: 'company' | 'competitor' | 'macro';
+  relevance?: string;
+  swing_pct?: number;
+}
+
 export interface StockMovement {
   date: string;
   open: number;
@@ -32,6 +43,7 @@ export interface StockMovement {
   change_pct: number;
   direction: 'up' | 'down';
   news: NewsArticle[];
+  news_summaries: NewsSearchSummary[];
 }
 
 export interface TickerAnalysis {
@@ -49,6 +61,7 @@ export interface TickerAnalysis {
   news_source: string;
   news_note?: string;
   batch_news_summaries: NewsSearchSummary[];
+  batch_news_cards: NewsCard[];
 }
 
 export interface ChatMessage {
