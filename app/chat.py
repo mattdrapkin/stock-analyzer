@@ -41,24 +41,27 @@ def _format_analysis_as_context(analysis: TickerAnalysis) -> str:
         "─" * 60,
     ]
 
-    # Display batch news summary if available (from web search)
-    if analysis.batch_news_summaries:
+    # Display batch news cards if available (from web search)
+    if analysis.batch_news_cards:
         lines.append("\n" + "─" * 60)
-        lines.append("NEWS SUMMARY (Entire Period)")
+        lines.append("NEWS HIGHLIGHTS (Entire Period)")
         lines.append("─" * 60)
-        for summary in analysis.batch_news_summaries:
+        for card in analysis.batch_news_cards:
             category_label = {
                 "company": "COMPANY-SPECIFIC NEWS",
                 "competitor": "COMPETITOR / INDUSTRY NEWS",
                 "macro": "MACRO / GEOPOLITICAL NEWS",
-            }.get(summary.category.value, "NEWS")
-            
+            }.get(card.category.value, "NEWS")
+
             lines.append(f"\n>> {category_label}:")
-            lines.append(f"   {summary.ai_summary}")
-            if summary.sources:
-                lines.append(f"   Sources ({len(summary.sources)}):")
-                for i, source in enumerate(summary.sources[:5], 1):
-                    lines.append(f"     {i}. {source}")
+            lines.append(f"   Title: {card.title}")
+            lines.append(f"   Summary: {card.summary}")
+            if card.date:
+                lines.append(f"   Date: {card.date}")
+            if card.source_name:
+                lines.append(f"   Source: {card.source_name}")
+            if card.relevance:
+                lines.append(f"   Relevance: {card.relevance}")
 
     if not analysis.movements:
         lines.append("(No major movements found in this period.)")
@@ -66,13 +69,14 @@ def _format_analysis_as_context(analysis: TickerAnalysis) -> str:
         lines.append("\n" + "─" * 60)
         lines.append("MOVEMENT DETAILS")
         lines.append("─" * 60)
-        
+
         for mv in analysis.movements:
             lines.append(
                 f"\nDATE: {mv.date}  |  {mv.direction.upper()} {mv.change_pct:+.2f}%"
                 f"  |  Open: ${mv.open:.2f}  →  Close: ${mv.close:.2f}"
                 f"  |  Volume: {mv.volume:,}"
             )
+
             # Handle individual articles (from mock data)
             if mv.news:
                 company_news = [a for a in mv.news if a.category.value == "company"]
@@ -94,8 +98,6 @@ def _format_analysis_as_context(analysis: TickerAnalysis) -> str:
                 _render_articles(company_news, "COMPANY-SPECIFIC NEWS")
                 _render_articles(competitor_news, "COMPETITOR / INDUSTRY NEWS")
                 _render_articles(macro_news, "MACRO / GEOPOLITICAL NEWS")
-            else:
-                lines.append("  (See batch news summary above for context)")
 
     return "\n".join(lines)
 
@@ -176,6 +178,7 @@ def chat_with_ticker(
         )
 
     context_block = _format_analysis_as_context(analysis)
+    logger.debug("=== CONTEXT PROVIDED TO LLM ===\n%s\n=== END CONTEXT ===", context_block)
 
     # Build messages list for the API call
     messages = [
@@ -198,9 +201,9 @@ def chat_with_ticker(
             messages=messages,
             temperature=0.3,
         )
-        print("COMPLETION:", completion.choices)
+        logger.debug("COMPLETION: %s", completion.choices)
         response_text = completion.choices[0].message.content or ""
-        print("RESPONSE:", response_text)
+        logger.debug("RESPONSE: %s", response_text)
     except OpenAIError as e:
         logger.error(f"OpenAI API error: {e}")
         response_text = (

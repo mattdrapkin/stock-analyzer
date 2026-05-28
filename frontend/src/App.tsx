@@ -1,15 +1,13 @@
 import React, { useState } from 'react';
 import ReactDatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
-import { 
-  Search, 
-  TrendingUp, 
-  TrendingDown, 
-  Calendar, 
-  MessageSquare, 
-  Info, 
+import {
+  Search,
+  TrendingUp,
+  TrendingDown,
+  Calendar,
+  Info,
   ExternalLink,
-  ChevronRight,
   ChevronDown,
   Loader2,
   AlertCircle,
@@ -18,9 +16,9 @@ import {
   Newspaper
 } from 'lucide-react';
 import { stockApi } from './api';
-import type { TickerAnalysis, StockMovement, NewsCard, ChatMessage, BasketAnalysisResponse, BasketTickerResult } from './api';
+import type { TickerAnalysis, StockMovement, NewsCard, BasketAnalysisResponse, BasketTickerResult } from './api';
 import { format } from 'date-fns';
-import Sidebar, { type Section } from './components/Sidebar';
+import HeaderNavigation, { type Section } from './components/HeaderNavigation';
 
 const App: React.FC = () => {
   const [ticker, setTicker] = useState('AAPL');
@@ -29,12 +27,6 @@ const App: React.FC = () => {
   const [analysis, setAnalysis] = useState<TickerAnalysis | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  
-  // Chat state
-  const [chatMessage, setChatMessage] = useState('');
-  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
-  const [chatLoading, setChatLoading] = useState(false);
-  const [isChatOpen, setIsChatOpen] = useState(false);
 
   // Basket analysis state
   const [viewMode, setViewMode] = useState<'single' | 'basket'>('single');
@@ -49,43 +41,36 @@ const App: React.FC = () => {
   const [holisticSummaryExpanded, setHolisticSummaryExpanded] = useState(true);
   const [newsHighlightsExpanded, setNewsHighlightsExpanded] = useState(true);
   const [tickerInfoExpanded, setTickerInfoExpanded] = useState(true);
-  const [chatExpanded, setChatExpanded] = useState(true);
   const [holisticSummary, setHolisticSummary] = useState<string | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
 
-  // Sidebar state
+  // Header navigation state
   const [activeSection, setActiveSection] = useState<string>('');
 
-  // Define sidebar sections based on view mode and data
-  const sidebarSections: Section[] = [
+  // Memoize section click handler to avoid unnecessary re-renders
+  const handleSectionClick = React.useCallback((sectionId: string) => {
+    setActiveSection(sectionId);
+  }, []);
+
+  // Define navigation sections based on view mode and data
+  const navSections: Section[] = [
     {
       id: 'holistic-summary',
       label: 'Holistic Summary',
       icon: Info,
-      visible: viewMode === 'single' && !!holisticSummary
-    },
-    {
-      id: 'news-highlights',
-      label: 'News Highlights',
-      icon: Newspaper,
-      visible: viewMode === 'single' && analysis?.batch_news_cards && analysis.batch_news_cards.length > 0
-    },
-    {
-      id: 'ticker-info',
-      label: 'Ticker Info',
-      icon: Info,
-      visible: viewMode === 'single' && !!analysis
-    },
-    {
-      id: 'ai-assistant',
-      label: 'AI Assistant',
-      icon: MessageSquare,
-      visible: viewMode === 'single' && !!analysis
+      visible: viewMode === 'single' && (!!holisticSummary || summaryLoading)
     },
     {
       id: 'movements',
       label: 'Significant Movements',
       icon: TrendingUp,
       visible: viewMode === 'single' && !!analysis
+    },
+    {
+      id: 'news-highlights',
+      label: 'News Highlights',
+      icon: Newspaper,
+      visible: viewMode === 'single' && analysis?.batch_news_cards && analysis.batch_news_cards.length > 0
     },
     {
       id: 'basket-performance',
@@ -114,13 +99,13 @@ const App: React.FC = () => {
       }
       const data = await stockApi.getAnalysis(ticker.toUpperCase(), params);
       setAnalysis(data);
-      setChatHistory([]); // Clear chat for new ticker
       setHolisticSummary(null); // Clear previous summary
+      setSummaryLoading(true); // Start loading summary
       
       // Auto-fetch holistic summary
       try {
         const summaryResponse = await stockApi.chat(ticker, {
-          message: 'Provide a holistic summary of what drove this stock\'s movements over the entire time period.',
+          message: 'Provide a 1-2 sentence summary of what drove this stock\'s movements over the entire time period. Keep it simple and readable.',
           history: []
         });
         setHolisticSummary(summaryResponse.response);
@@ -128,6 +113,8 @@ const App: React.FC = () => {
         // Log error and fail gracefully if summary fetch fails
         console.error('Failed to fetch holistic summary:', err);
         setHolisticSummary(null);
+      } finally {
+        setSummaryLoading(false); // Stop loading summary
       }
     } catch (err: unknown) {
       if (err && typeof err === 'object' && 'response' in err) {
@@ -190,44 +177,10 @@ const App: React.FC = () => {
     setBasketEndDate(null);
   };
 
-  const handleChat = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!chatMessage || !analysis) return;
-
-    const newMessage: ChatMessage = { role: 'user', content: chatMessage };
-    setChatHistory(prev => [...prev, newMessage]);
-    setChatMessage('');
-    setChatLoading(true);
-
-    try {
-      const response = await stockApi.chat(analysis.ticker, {
-        message: chatMessage,
-        history: chatHistory
-      });
-      const assistantMessage: ChatMessage = { role: 'assistant', content: response.response };
-      setChatHistory(prev => [...prev, assistantMessage]);
-    } catch {
-      const errorMessage: ChatMessage = { 
-        role: 'assistant', 
-        content: 'Sorry, I encountered an error while processing your request.' 
-      };
-      setChatHistory(prev => [...prev, errorMessage]);
-    } finally {
-      setChatLoading(false);
-    }
-  };
-
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
-      {/* Sidebar */}
-      <Sidebar
-        sections={sidebarSections}
-        activeSection={activeSection}
-        onSectionClick={setActiveSection}
-      />
-
       {/* Header */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-10 lg:pl-64">
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-10">
         <div className="max-w-6xl mx-auto px-4 py-4">
           {/* Logo and View Toggle */}
           <div className="flex items-center justify-between mb-4">
@@ -383,9 +336,18 @@ const App: React.FC = () => {
             </form>
           )}
         </div>
+
+        {/* Section Navigation */}
+        <div className="flex justify-center">
+          <HeaderNavigation
+            sections={navSections}
+            activeSection={activeSection}
+            onSectionClick={handleSectionClick}
+          />
+        </div>
       </header>
 
-      <main className="max-w-6xl mx-auto px-4 py-8 lg:pl-64">
+      <main className="max-w-6xl mx-auto px-4 py-8">
         {viewMode === 'single' ? (
           <>
             {error && (
@@ -410,7 +372,7 @@ const App: React.FC = () => {
             {analysis && (
               <div className="space-y-6">
                 {/* Holistic Summary */}
-                {holisticSummary && (
+                {(holisticSummary || summaryLoading) && (
                   <div id="holistic-summary">
                     <CollapsibleSection
                       title="Holistic Summary"
@@ -418,28 +380,16 @@ const App: React.FC = () => {
                       expanded={holisticSummaryExpanded}
                       onToggle={() => setHolisticSummaryExpanded(!holisticSummaryExpanded)}
                     >
-                      <div className="prose prose-slate max-w-none">
-                        <p className="text-slate-700 leading-relaxed whitespace-pre-wrap">{holisticSummary}</p>
-                      </div>
-                    </CollapsibleSection>
-                  </div>
-                )}
-
-                {/* Batch News Cards */}
-                {analysis.batch_news_cards && analysis.batch_news_cards.length > 0 && (
-                  <div id="news-highlights">
-                    <CollapsibleSection
-                      title="News Highlights"
-                      icon={Newspaper}
-                      expanded={newsHighlightsExpanded}
-                      onToggle={() => setNewsHighlightsExpanded(!newsHighlightsExpanded)}
-                      badge={`${analysis.batch_news_cards.length} articles`}
-                    >
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        {analysis.batch_news_cards.map((card, i) => (
-                          <NewsCardItem key={i} card={card} />
-                        ))}
-                      </div>
+                      {summaryLoading ? (
+                        <div className="flex items-center gap-2 text-slate-500">
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          <span className="text-sm">Generating summary...</span>
+                        </div>
+                      ) : (
+                        <div className="prose prose-slate max-w-none">
+                          <p className="text-slate-700 leading-relaxed whitespace-pre-wrap">{holisticSummary}</p>
+                        </div>
+                      )}
                     </CollapsibleSection>
                   </div>
                 )}
@@ -454,12 +404,12 @@ const App: React.FC = () => {
                       expanded={tickerInfoExpanded}
                       onToggle={() => setTickerInfoExpanded(!tickerInfoExpanded)}
                     >
-                      <div className="flex justify-between items-start mb-4">
+                      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-3 mb-4">
                         <div>
                           <h2 className="text-3xl font-bold">{analysis.ticker}</h2>
                           <p className="text-slate-500 font-medium">{analysis.company_name}</p>
                         </div>
-                        <div className="bg-slate-100 px-3 py-1 rounded-full text-xs font-bold text-slate-600 uppercase tracking-wider">
+                        <div className="bg-slate-100 px-3 py-1 rounded-full text-xs font-bold text-slate-600 uppercase tracking-wide whitespace-nowrap">
                           {analysis.sector || 'N/A'}
                         </div>
                       </div>
@@ -489,67 +439,6 @@ const App: React.FC = () => {
                       </div>
                     </CollapsibleSection>
                   </div>
-
-                  {/* Chat Interface (Desktop) */}
-                  <div id="ai-assistant">
-                    <CollapsibleSection
-                      title="AI Stock Assistant"
-                      icon={MessageSquare}
-                      expanded={chatExpanded}
-                      onToggle={() => setChatExpanded(!chatExpanded)}
-                      className="hidden lg:flex"
-                    >
-                      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden flex flex-col h-[500px]">
-                      
-                      <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                        {chatHistory.length === 0 ? (
-                          <div className="text-center py-8">
-                            <p className="text-sm text-slate-400">Ask about {analysis.ticker}'s movements...</p>
-                          </div>
-                        ) : (
-                          chatHistory.map((msg, i) => (
-                            <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                              <div className={`max-w-[85%] p-3 rounded-2xl text-sm ${
-                                msg.role === 'user' 
-                                  ? 'bg-indigo-600 text-white rounded-tr-none' 
-                                  : 'bg-slate-100 text-slate-800 rounded-tl-none'
-                              }`}>
-                                {msg.content}
-                              </div>
-                            </div>
-                          ))
-                        )}
-                        {chatLoading && (
-                          <div className="flex justify-start">
-                            <div className="bg-slate-100 p-3 rounded-2xl rounded-tl-none">
-                              <Loader2 className="w-4 h-4 animate-spin text-slate-400" />
-                            </div>
-                          </div>
-                        )}
-                      </div>
-
-                        <form onSubmit={handleChat} className="p-4 bg-white border-t border-slate-100">
-                          <div className="flex gap-2">
-                            <input
-                              type="text"
-                              value={chatMessage}
-                              onChange={(e) => setChatMessage(e.target.value)}
-                              placeholder="Ask why it moved..."
-                              className="flex-1 bg-slate-50 border-none rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
-                            />
-                            <button 
-                              type="submit" 
-                              disabled={chatLoading || !chatMessage}
-                              className="bg-indigo-600 text-white p-2 rounded-lg disabled:opacity-50"
-                              title="Send message"
-                            >
-                              <ChevronRight className="w-4 h-4" />
-                            </button>
-                          </div>
-                        </form>
-                      </div>
-                    </CollapsibleSection>
-                  </div>
                 </div>
 
                 {/* Right Column: Movements Timeline */}
@@ -573,6 +462,25 @@ const App: React.FC = () => {
                   )}
                 </div>
                 </div>
+
+                {/* Batch News Cards */}
+                {analysis.batch_news_cards && analysis.batch_news_cards.length > 0 && (
+                  <div id="news-highlights">
+                    <CollapsibleSection
+                      title="News Highlights"
+                      icon={Newspaper}
+                      expanded={newsHighlightsExpanded}
+                      onToggle={() => setNewsHighlightsExpanded(!newsHighlightsExpanded)}
+                      badge={`${analysis.batch_news_cards.length} articles`}
+                    >
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        {analysis.batch_news_cards.map((card, i) => (
+                          <NewsCardItem key={i} card={card} />
+                        ))}
+                      </div>
+                    </CollapsibleSection>
+                  </div>
+                )}
               </div>
             )}
           </>
@@ -630,17 +538,6 @@ const App: React.FC = () => {
           </>
         )}
       </main>
-
-      {/* Floating Chat Button (Mobile) */}
-      {analysis && (
-        <button
-          onClick={() => setIsChatOpen(!isChatOpen)}
-          className="lg:hidden fixed bottom-6 right-6 bg-indigo-600 text-white p-4 rounded-full shadow-lg z-20"
-          title="Toggle chat"
-        >
-          <MessageSquare className="w-6 h-6" />
-        </button>
-      )}
     </div>
   );
 };
