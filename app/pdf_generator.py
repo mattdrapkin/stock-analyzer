@@ -3,17 +3,24 @@ PDF generation utility for stock analysis reports.
 """
 
 import re
-from datetime import datetime, timezone
+import logging
+from datetime import datetime, timezone, date
 from typing import Optional
 from io import BytesIO
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend
+import matplotlib.pyplot as plt
+import pandas as pd
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
 from reportlab.lib import colors
 from reportlab.lib.colors import blue
 from .models import TickerAnalysis, BasketAnalysisResponse
+
+logger = logging.getLogger(__name__)
 
 
 def parse_markdown_to_reportlab(text: str) -> str:
@@ -47,6 +54,197 @@ def parse_markdown_to_reportlab(text: str) -> str:
     text = re.sub(r'\*([^*]+)\*', r'<i>\1</i>', text)
     
     return text
+
+
+def generate_price_chart(
+    ticker: str,
+    start_date: datetime.date,
+    end_date: datetime.date,
+    min_movement_pct: float
+) -> BytesIO:
+    """
+    Generate a price chart with moving averages using matplotlib.
+    
+    Returns:
+        BytesIO: Image data in PNG format
+    """
+    from .stock_data import fetch_price_history
+    
+    try:
+        # Fetch price history
+        df = fetch_price_history(ticker, start_date, end_date)
+        
+        if df.empty:
+            return None
+        
+        # Calculate moving averages
+        df['MA20'] = df['Close'].rolling(window=20).mean()
+        df['MA50'] = df['Close'].rolling(window=50).mean()
+        
+        # Create figure
+        fig, ax = plt.subplots(figsize=(10, 4))
+        fig.patch.set_facecolor('white')
+        
+        # Plot close price
+        ax.plot(df.index, df['Close'], label='Close Price', color='#4f46e5', linewidth=2)
+        
+        # Plot moving averages if available
+        if len(df) >= 20:
+            ax.plot(df.index, df['MA20'], label='20-day MA', color='#f59e0b', linewidth=1.5)
+        if len(df) >= 50:
+            ax.plot(df.index, df['MA50'], label='50-day MA', color='#10b981', linewidth=1.5)
+        
+        # Highlight major movements
+        # Avoid division by zero
+        df['change_pct'] = df.apply(
+            lambda row: ((row['Close'] - row['Open']) / row['Open']) * 100 if row['Open'] != 0 else 0,
+            axis=1
+        )
+        major_moves = df[abs(df['change_pct']) >= min_movement_pct]
+        
+        for idx, row in major_moves.iterrows():
+            color = '#10b981' if row['change_pct'] > 0 else '#ef4444'
+            ax.scatter(idx, row['Close'], color=color, s=50, zorder=5, edgecolors='white', linewidths=1.5)
+        
+        # Formatting
+        ax.set_title(f'{ticker} Price History', fontsize=12, fontweight='bold')
+        ax.set_xlabel('Date', fontsize=10)
+        ax.set_ylabel('Price ($)', fontsize=10)
+        ax.legend(loc='best', fontsize=9)
+        ax.grid(True, alpha=0.3)
+        
+        # Format x-axis dates
+        import matplotlib.dates as mdates
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+        plt.xticks(rotation=45, ha='right')
+        
+        plt.tight_layout()
+        
+        # Save to BytesIO
+        img_buffer = BytesIO()
+        plt.savefig(img_buffer, format='png', dpi=150, bbox_inches='tight')
+        img_buffer.seek(0)
+        
+        return img_buffer
+    except Exception as e:
+        logger.error(f"Error generating price chart: {e}")
+        return None
+    finally:
+        plt.close(fig)
+
+
+def generate_volume_chart(
+    ticker: str,
+    start_date: datetime.date,
+    end_date: datetime.date
+) -> BytesIO:
+    """
+    Generate a volume chart using matplotlib.
+    
+    Returns:
+        BytesIO: Image data in PNG format
+    """
+    from .stock_data import fetch_price_history
+    
+    try:
+        # Fetch price history
+        df = fetch_price_history(ticker, start_date, end_date)
+        
+        if df.empty:
+            return None
+        
+        # Create figure
+        fig, ax = plt.subplots(figsize=(10, 3))
+        fig.patch.set_facecolor('white')
+        
+        # Plot volume as bar chart
+        colors = ['#6366f1' if row['Close'] >= row['Open'] else '#ef4444' 
+                  for idx, row in df.iterrows()]
+        ax.bar(df.index, df['Volume'], color=colors, width=0.8)
+        
+        # Formatting
+        ax.set_title(f'{ticker} Trading Volume', fontsize=12, fontweight='bold')
+        ax.set_xlabel('Date', fontsize=10)
+        ax.set_ylabel('Volume', fontsize=10)
+        ax.grid(True, alpha=0.3, axis='y')
+        
+        # Format y-axis to show millions
+        ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{x/1e6:.0f}M'))
+        
+        # Format x-axis dates
+        import matplotlib.dates as mdates
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+        plt.xticks(rotation=45, ha='right')
+        
+        plt.tight_layout()
+        
+        # Save to BytesIO
+        img_buffer = BytesIO()
+        plt.savefig(img_buffer, format='png', dpi=150, bbox_inches='tight')
+        img_buffer.seek(0)
+        
+        return img_buffer
+    except Exception as e:
+        logger.error(f"Error generating volume chart: {e}")
+        return None
+    finally:
+        plt.close(fig)
+
+
+def generate_basket_performance_chart(basket_response: BasketAnalysisResponse) -> BytesIO:
+    """
+    Generate a basket performance bar chart using matplotlib.
+    
+    Returns:
+        BytesIO: Image data in PNG format
+    """
+    try:
+        if not basket_response.results:
+            return None
+        
+        # Sort by absolute change percentage
+        results = sorted(basket_response.results, 
+                       key=lambda x: abs(x.total_change_pct or 0), 
+                       reverse=True)[:10]  # Top 10 movers
+        
+        tickers = [r.ticker for r in results]
+        changes = [r.total_change_pct or 0 for r in results]
+        colors = ['#10b981' if c >= 0 else '#ef4444' for c in changes]
+        
+        # Create figure
+        fig, ax = plt.subplots(figsize=(10, 5))
+        fig.patch.set_facecolor('white')
+        
+        # Plot horizontal bar chart
+        bars = ax.barh(tickers, changes, color=colors)
+        
+        # Formatting
+        ax.set_title('Top 10 Movers by Percentage Change', fontsize=12, fontweight='bold')
+        ax.set_xlabel('Percentage Change (%)', fontsize=10)
+        ax.set_ylabel('Ticker', fontsize=10)
+        ax.grid(True, alpha=0.3, axis='x')
+        
+        # Add value labels on bars
+        for bar, change in zip(bars, changes):
+            ax.text(bar.get_width() + (0.5 if change >= 0 else -0.5), 
+                   bar.get_y() + bar.get_height()/2,
+                   f'{change:+.1f}%',
+                   va='center', ha='left' if change >= 0 else 'right',
+                   fontsize=9)
+        
+        plt.tight_layout()
+        
+        # Save to BytesIO
+        img_buffer = BytesIO()
+        plt.savefig(img_buffer, format='png', dpi=150, bbox_inches='tight')
+        img_buffer.seek(0)
+        
+        return img_buffer
+    except Exception as e:
+        logger.error(f"Error generating basket performance chart: {e}")
+        return None
+    finally:
+        plt.close(fig)
 
 
 def generate_analysis_pdf(analysis: TickerAnalysis, params: dict) -> bytes:
@@ -167,6 +365,32 @@ def generate_analysis_pdf(analysis: TickerAnalysis, params: dict) -> bytes:
     ]))
     story.append(stats_table)
     story.append(Spacer(1, 0.3 * inch))
+    
+    # Analysis Graphs
+    story.append(Paragraph("Analysis Graphs", heading_style))
+    
+    # Generate and add price chart
+    price_chart = generate_price_chart(
+        analysis.ticker,
+        analysis.period_start,
+        analysis.period_end,
+        analysis.min_movement_pct
+    )
+    if price_chart:
+        img = Image(price_chart, width=6.5 * inch, height=2.5 * inch)
+        story.append(img)
+        story.append(Spacer(1, 0.2 * inch))
+    
+    # Generate and add volume chart
+    volume_chart = generate_volume_chart(
+        analysis.ticker,
+        analysis.period_start,
+        analysis.period_end
+    )
+    if volume_chart:
+        img = Image(volume_chart, width=6.5 * inch, height=2 * inch)
+        story.append(img)
+        story.append(Spacer(1, 0.3 * inch))
     
     # Significant Movements
     story.append(Paragraph("Significant Price Movements", heading_style))
@@ -378,6 +602,16 @@ def generate_basket_pdf(basket_response: BasketAnalysisResponse, params: dict) -
     ]))
     story.append(stats_table)
     story.append(Spacer(1, 0.3 * inch))
+    
+    # Analysis Graphs
+    story.append(Paragraph("Analysis Graphs", heading_style))
+    
+    # Generate and add basket performance chart
+    basket_chart = generate_basket_performance_chart(basket_response)
+    if basket_chart:
+        img = Image(basket_chart, width=6.5 * inch, height=3 * inch)
+        story.append(img)
+        story.append(Spacer(1, 0.3 * inch))
     
     # Basket Performance Table
     story.append(Paragraph("Basket Performance", heading_style))
