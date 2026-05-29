@@ -20,7 +20,7 @@ load_dotenv()
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from .models import (
     BasketAnalysisRequest,
@@ -37,6 +37,7 @@ from .basket_analyzer import analyze_basket
 from .chat import chat_with_ticker, has_openai_key
 from .fun_facts import generate_fun_facts
 from .news_fetcher import has_openai_key as news_has_openai_key, RateLimitError
+from .pdf_generator import generate_analysis_pdf
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -452,4 +453,97 @@ def get_fun_facts(
         return generate_fun_facts(body)
     except Exception as e:
         logger.exception(f"Unexpected error generating fun facts")
+        raise HTTPException(status_code=500, detail=f"Internal error: {e}")
+
+
+@app.get(
+    "/api/v1/analysis/{ticker}/pdf",
+    tags=["Analysis"],
+    summary="Download stock analysis as PDF",
+)
+def download_analysis_pdf(
+    ticker: str,
+    start_date: Optional[date] = Query(
+        default=None,
+        description="Start date (YYYY-MM-DD). Defaults to 90 days ago.",
+    ),
+    end_date: Optional[date] = Query(
+        default=None,
+        description="End date (YYYY-MM-DD). Defaults to today.",
+    ),
+    min_movement_pct: float = Query(
+        default=float(os.getenv("MIN_MOVEMENT_PCT", "2.0")),
+        ge=0.1,
+        le=50.0,
+        description="Minimum absolute intra-day % change to flag as a major movement.",
+    ),
+    include_competitors: bool = Query(
+        default=False,
+        description="Also fetch competitor / industry news around each movement.",
+    ),
+    include_macro: bool = Query(
+        default=False,
+        description="Also fetch macro / geopolitical news around each movement.",
+    ),
+    max_articles: int = Query(
+        default=5,
+        ge=1,
+        le=20,
+        description="Maximum news articles per category per movement day.",
+    ),
+) -> Response:
+    """
+    Generate and download a PDF report for the stock analysis.
+    
+    The PDF includes:
+    - Report generation timestamp
+    - Company information
+    - Analysis parameters (date range, threshold, etc.)
+    - Summary statistics
+    - Significant price movements table
+    - News highlights
+    
+    Returns a PDF file with the analysis results.
+    """
+    resolved_end = end_date or date.today()
+    resolved_start = start_date or (resolved_end - timedelta(days=90))
+
+    if resolved_start > resolved_end:
+        raise HTTPException(status_code=422, detail="start_date must be before end_date.")
+    if (resolved_end - resolved_start).days > 730:
+        raise HTTPException(status_code=422, detail="Date range cannot exceed 2 years.")
+
+    try:
+        analysis = build_analysis(
+            ticker=ticker.upper(),
+            start_date=resolved_start,
+            end_date=resolved_end,
+            min_movement_pct=min_movement_pct,
+            include_competitors=include_competitors,
+            include_macro=include_macro,
+            max_articles_per_category=max_articles,
+            cache_ttl=CACHE_TTL,
+        )
+        
+        params = {
+            'include_competitors': include_competitors,
+            'include_macro': include_macro,
+        }
+        
+        pdf_content = generate_analysis_pdf(analysis, params)
+        
+        return Response(
+            content=pdf_content,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f"attachment; filename={ticker}_analysis_{resolved_start}_to_{resolved_end}.pdf"
+            }
+        )
+    except RateLimitError as e:
+        logger.warning(f"Rate limit error in PDF generation: {e}")
+        raise HTTPException(status_code=429, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception(f"Unexpected error generating PDF for {ticker}")
         raise HTTPException(status_code=500, detail=f"Internal error: {e}")

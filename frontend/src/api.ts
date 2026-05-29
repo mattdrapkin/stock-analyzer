@@ -200,5 +200,50 @@ export const stockApi = {
       }
       throw error;
     }
+  },
+
+  downloadAnalysisPdf: async (ticker: string, params?: {
+    start_date?: string;
+    end_date?: string;
+    min_movement_pct?: number;
+    include_competitors?: boolean;
+    include_macro?: boolean;
+    max_articles?: number;
+  }) => {
+    try {
+      const response = await api.get(`/analysis/${ticker}/pdf`, {
+        params,
+        responseType: 'blob',
+      });
+      
+      // Create download link
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      
+      // Extract filename from Content-Disposition header if available
+      const contentDisposition = response.headers['content-disposition'];
+      let filename = `${ticker}_analysis.pdf`;
+      if (contentDisposition) {
+        const filenameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+        if (filenameMatch && filenameMatch[1]) {
+          filename = filenameMatch[1].replace(/['"]/g, '');
+        }
+      }
+      
+      link.setAttribute('download', filename);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (error: unknown) {
+      if (error && typeof error === 'object' && 'response' in error) {
+        const err = error as { response?: { status?: number; data?: { detail?: string } } };
+        if (err.response?.status === 429) {
+          throw new Error(err.response.data?.detail || 'Rate limit reached. Please wait a moment before trying again.', { cause: error });
+        }
+      }
+      throw error;
+    }
   }
 };

@@ -18,21 +18,25 @@ OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 
-FUN_FACTS_SYSTEM_PROMPT = """You are an expert financial analyst and engaging storyteller.
-Your job is to generate 5-8 interesting, fun facts about the provided stock ticker(s) or basket of stocks.
+FUN_FACTS_SYSTEM_PROMPT = """You are a sophisticated institutional investor with deep knowledge of public and private markets, having worked at top-tier endowments, hedge funds, and venture capital firms.
+Your job is to generate 5-8 genuinely interesting, non-obvious insights about the provided stock ticker(s) or basket of stocks.
 
 Guidelines:
-1. Facts should be relevant to the company/companies, their industry, or their stock performance
-2. Mix of historical facts, business trivia, market performance insights, and company culture
-3. Keep each fact concise (1-2 sentences max)
-4. Make facts engaging and surprising when possible
-5. Avoid overly technical jargon - keep it accessible
-6. Do not include financial advice or investment recommendations
-7. Return the facts as a numbered list, one per line
+1. Focus on sophisticated market insights: capital structure anomalies, ownership patterns, competitive moats, regulatory arbitrage, or unique business model economics
+2. Include insights about private market parallels, venture ecosystem connections, or institutional ownership patterns
+3. Reference historical market anomalies, sector rotation patterns, or macroeconomic linkages that sophisticated investors would find compelling
+4. Highlight non-obvious competitive dynamics, supply chain vulnerabilities, or optionality in the business model
+5. Touch on governance structures, founder ownership, or capital allocation strategies that drive long-term value
+6. Include insights about the company's role in broader market structure, index inclusion effects, or ETF flow impacts
+7. Reference interesting comparisons across public/private market valuations or similar companies in different geographies
+8. Keep each fact concise (1-2 sentences max) but dense with insight
+9. Avoid generic trivia, basic company history, or surface-level facts
+10. Do not include financial advice or investment recommendations
+11. Return the facts as a numbered list, one per line
 
 Example format:
-1. Apple was founded in 1976 in a garage by Steve Jobs and Steve Wozniak
-2. The company's market cap exceeded $3 trillion in 2022, making it the most valuable company in history
+1. NVIDIA's GPU dominance creates a structural moat in AI training that's difficult to displace due to CUDA ecosystem lock-in
+2. The company's high float percentage makes it a favorite for passive index funds, creating persistent buying pressure
 3. etc.
 """
 
@@ -47,14 +51,15 @@ def generate_fun_facts(request: FunFactsRequest) -> FunFactsResponse:
 
     if not has_openai_key():
         logger.warning("No OpenAI API key configured, using fallback facts")
-        # Fallback to generic facts if no API key
+        # Fallback to sophisticated facts if no API key
         return FunFactsResponse(
             facts=[
-                "Stock market analysis can reveal fascinating patterns in company performance",
-                "Many of today's tech giants started in small garages or dorm rooms",
-                "Market capitalization reflects investor confidence in a company's future",
-                "Historical stock data can tell stories about innovation and economic shifts",
-                "The NYSE can process billions of shares in a single trading day",
+                "Index fund flows can create persistent price pressure on high-float stocks, independent of fundamentals",
+                "Private market valuations often lead public market comps by 6-18 months due to information asymmetry",
+                "Companies with dual-class share structures often trade at governance discounts despite founder alignment benefits",
+                "ETF inclusion effects can add 5-15bps of permanent beta to large-cap stocks through passive rebalancing",
+                "Supply chain concentration in single geographies creates hidden tail risks not captured in financial statements",
+                "Revenue quality metrics like cash conversion often signal future earnings revisions before they hit consensus estimates",
             ]
         )
 
@@ -68,7 +73,7 @@ def generate_fun_facts(request: FunFactsRequest) -> FunFactsResponse:
         # Default fallback
         subject = "the stock market and investing"
 
-    user_prompt = f"Generate 5-8 fun, interesting facts about {subject}. Focus on company history, market performance, industry trivia, and surprising business insights."
+    user_prompt = f"Generate 5-8 sophisticated, non-obvious insights about {subject} that would interest a top-tier institutional investor. Focus on structural advantages, market dynamics, ownership patterns, competitive moats, or unique aspects of the business model that aren't widely appreciated."
     logger.info(f"User prompt: {user_prompt}")
 
     try:
@@ -109,15 +114,15 @@ def generate_fun_facts(request: FunFactsRequest) -> FunFactsResponse:
             logger.warning(f"Rate limit hit in fun facts: {e}")
             return FunFactsResponse(
                 facts=[
-                    "Stock market analysis can reveal fascinating patterns in company performance",
-                    "Many of today's tech giants started in small garages or dorm rooms",
+                    "Index fund flows can create persistent price pressure on high-float stocks, independent of fundamentals",
+                    "Private market valuations often lead public market comps by 6-18 months due to information asymmetry",
                 ]
             )
         else:
             logger.error(f"OpenAI API error in fun facts: {e}")
             return FunFactsResponse(
                 facts=[
-                    "Stock market analysis can reveal fascinating patterns in company performance",
-                    "Many of today's tech giants started in small garages or dorm rooms",
+                    "Index fund flows can create persistent price pressure on high-float stocks, independent of fundamentals",
+                    "Private market valuations often lead public market comps by 6-18 months due to information asymmetry",
                 ]
             )

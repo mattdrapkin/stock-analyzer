@@ -13,7 +13,8 @@ import {
   AlertCircle,
   X,
   Layers,
-  Newspaper
+  Newspaper,
+  Download
 } from 'lucide-react';
 import { stockApi } from './api';
 import type { TickerAnalysis, StockMovement, NewsCard, BasketAnalysisResponse, BasketTickerResult } from './api';
@@ -131,10 +132,13 @@ const App: React.FC = () => {
   const [minMovementThreshold, setMinMovementThreshold] = useState(2.0);
 
   // Sort state
-  const [movementSort, setMovementSort] = useState<'date' | 'biggest' | 'smallest'>('date');
+  const [movementSort, setMovementSort] = useState<'date' | 'biggest_winners' | 'biggest_losers'>('date');
 
   // Header navigation state
   const [activeSection, setActiveSection] = useState<string>('');
+
+  // PDF download state
+  const [downloadingPdf, setDownloadingPdf] = useState(false);
 
   // Memoize section click handler to avoid unnecessary re-renders
   const handleSectionClick = React.useCallback((sectionId: string) => {
@@ -151,12 +155,12 @@ const App: React.FC = () => {
       case 'date':
         // Default: already sorted by date (newest first from API)
         return movements;
-      case 'biggest':
-        // Sort by absolute change percentage, biggest first
-        return movements.sort((a, b) => Math.abs(b.change_pct) - Math.abs(a.change_pct));
-      case 'smallest':
-        // Sort by absolute change percentage, smallest first
-        return movements.sort((a, b) => Math.abs(a.change_pct) - Math.abs(b.change_pct));
+      case 'biggest_winners':
+        // Sort by change percentage descending (biggest positive to smallest positive)
+        return movements.sort((a, b) => b.change_pct - a.change_pct);
+      case 'biggest_losers':
+        // Sort by change percentage ascending (biggest negative to smallest negative)
+        return movements.sort((a, b) => a.change_pct - b.change_pct);
       default:
         return movements;
     }
@@ -319,6 +323,35 @@ const App: React.FC = () => {
     setBasketEndDate(null);
   };
 
+  const handleDownloadPdf = async () => {
+    if (!analysis) return;
+    
+    setDownloadingPdf(true);
+    try {
+      const params: {
+        start_date?: string;
+        end_date?: string;
+        min_movement_pct?: number;
+      } = {
+        min_movement_pct: minMovementThreshold
+      };
+      
+      if (startDate) {
+        params.start_date = format(startDate, 'yyyy-MM-dd');
+      }
+      if (endDate) {
+        params.end_date = format(endDate, 'yyyy-MM-dd');
+      }
+      
+      await stockApi.downloadAnalysisPdf(analysis.ticker, params);
+    } catch (err) {
+      console.error('PDF download error:', err);
+      alert('Failed to download PDF. Please try again.');
+    } finally {
+      setDownloadingPdf(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
       {/* Header */}
@@ -332,28 +365,41 @@ const App: React.FC = () => {
               </div>
               <h1 className="text-xl font-bold tracking-tight">Stock Analyzer</h1>
             </div>
-            <div className="flex bg-slate-100 rounded-lg p-1">
-              <button
-                onClick={() => setViewMode('single')}
-                className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                  viewMode === 'single' 
-                    ? 'bg-white text-indigo-600 shadow-sm' 
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Single Ticker
-              </button>
-              <button
-                onClick={() => setViewMode('basket')}
-                className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-1.5 ${
-                  viewMode === 'basket' 
-                    ? 'bg-white text-indigo-600 shadow-sm' 
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                <Layers className="w-4 h-4" />
-                Basket
-              </button>
+            <div className="flex items-center gap-3">
+              <div className="flex bg-slate-100 rounded-lg p-1">
+                <button
+                  onClick={() => setViewMode('single')}
+                  className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                    viewMode === 'single' 
+                      ? 'bg-white text-indigo-600 shadow-sm' 
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  Single Ticker
+                </button>
+                <button
+                  onClick={() => setViewMode('basket')}
+                  className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                    viewMode === 'basket' 
+                      ? 'bg-white text-indigo-600 shadow-sm' 
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <Layers className="w-4 h-4" />
+                  Basket
+                </button>
+              </div>
+              {viewMode === 'single' && analysis && (
+                <button
+                  onClick={handleDownloadPdf}
+                  disabled={downloadingPdf}
+                  className="flex items-center gap-2 px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors"
+                  title="Download PDF Report"
+                >
+                  {downloadingPdf ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                  <span>Download Report</span>
+                </button>
+              )}
             </div>
           </div>
 
@@ -643,13 +689,13 @@ const App: React.FC = () => {
                       <label className="text-sm text-slate-600 font-medium">Sort by:</label>
                       <select
                         value={movementSort}
-                        onChange={(e) => setMovementSort(e.target.value as 'date' | 'biggest' | 'smallest')}
+                        onChange={(e) => setMovementSort(e.target.value as 'date' | 'biggest_winners' | 'biggest_losers')}
                         title="Sort movements by date or magnitude"
                         className="px-3 py-1.5 bg-slate-100 border-transparent focus:bg-white focus:ring-2 focus:ring-indigo-500 rounded-lg outline-none text-sm font-medium transition-all cursor-pointer"
                       >
                         <option value="date">Date</option>
-                        <option value="biggest">Biggest Moves</option>
-                        <option value="smallest">Smallest Moves</option>
+                        <option value="biggest_winners">Biggest Winners</option>
+                        <option value="biggest_losers">Biggest Losers</option>
                       </select>
                     </div>
                   </div>
