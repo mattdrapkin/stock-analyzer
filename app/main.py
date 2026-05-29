@@ -37,7 +37,7 @@ from .basket_analyzer import analyze_basket
 from .chat import chat_with_ticker, has_openai_key
 from .fun_facts import generate_fun_facts
 from .news_fetcher import has_openai_key as news_has_openai_key, RateLimitError
-from .pdf_generator import generate_analysis_pdf
+from .pdf_generator import generate_analysis_pdf, generate_basket_pdf
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -390,7 +390,7 @@ def analyze_basket_endpoint(
     - `include_macro=true` → includes Fed, rates, geopolitics news
     """
     # Normalize tickers
-    normalized_tickers = [t.upper().strip() for t in body.tickers if t.strip()]
+    normalized_tickers = [t.upper().strip() for t in body.tickers if t and t.strip()]
     
     if not normalized_tickers:
         raise HTTPException(status_code=422, detail="At least one valid ticker is required.")
@@ -546,4 +546,89 @@ def download_analysis_pdf(
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.exception(f"Unexpected error generating PDF for {ticker}")
+        raise HTTPException(status_code=500, detail=f"Internal error: {e}")
+
+
+@app.post(
+    "/api/v1/basket/pdf",
+    tags=["Basket"],
+    summary="Download basket analysis as PDF",
+)
+def download_basket_pdf(
+    body: BasketAnalysisRequest,
+    include_news: bool = Query(
+        default=False,
+        description="Include news articles for each stock in the basket.",
+    ),
+    include_competitors: bool = Query(
+        default=False,
+        description="Also fetch competitor / industry news for each stock.",
+    ),
+    include_macro: bool = Query(
+        default=False,
+        description="Also fetch macro / geopolitical news for each stock.",
+    ),
+) -> Response:
+    """
+    Generate and download a PDF report for the basket analysis.
+    
+    The PDF includes:
+    - Report generation timestamp
+    - Analysis parameters (date range, tickers, etc.)
+    - Summary statistics
+    - Basket performance table with all tickers
+    - Holistic summary (if available)
+    - News highlights by ticker (if news was fetched)
+    
+    Returns a PDF file with the basket analysis results.
+    """
+    # Normalize tickers
+    normalized_tickers = [t.upper().strip() for t in body.tickers if t and t.strip()]
+    
+    if not normalized_tickers:
+        raise HTTPException(status_code=422, detail="At least one valid ticker is required.")
+    
+    if len(normalized_tickers) > 50:
+        raise HTTPException(status_code=422, detail="Maximum 50 tickers allowed per request.")
+    
+    if body.start_date > body.end_date:
+        raise HTTPException(status_code=422, detail="start_date must be before end_date.")
+    
+    if (body.end_date - body.start_date).days > 730:
+        raise HTTPException(status_code=422, detail="Date range cannot exceed 2 years.")
+
+    try:
+        basket_response = analyze_basket(
+            tickers=normalized_tickers,
+            start_date=body.start_date,
+            end_date=body.end_date,
+            include_news=include_news,
+            include_competitors=include_competitors,
+            include_macro=include_macro,
+        )
+        
+        params = {
+            'include_competitors': include_competitors,
+            'include_macro': include_macro,
+        }
+        
+        pdf_content = generate_basket_pdf(basket_response, params)
+        
+        # Create filename from tickers
+        ticker_str = "_".join(normalized_tickers[:5])
+        if len(normalized_tickers) > 5:
+            ticker_str += f"_and_{len(normalized_tickers) - 5}_more"
+        
+        return Response(
+            content=pdf_content,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f"attachment; filename=basket_{ticker_str}_{body.start_date}_to_{body.end_date}.pdf"
+            }
+        )
+    except RateLimitError as e:
+        logger.warning(f"Rate limit error in basket PDF generation: {e}")
+        raise HTTPException(status_code=429, detail=str(e))
+    except Exception as e:
+        logger.exception(f"Unexpected error generating basket PDF")
         raise HTTPException(status_code=500, detail=f"Internal error: {e}")

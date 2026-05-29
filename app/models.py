@@ -106,6 +106,8 @@ class HealthResponse(BaseModel):
 class BasketTickerResult(BaseModel):
     ticker: str
     company_name: Optional[str] = None
+    sector: Optional[str] = None
+    industry: Optional[str] = None
     start_price: float
     end_price: float
     total_change_pct: float

@@ -1,13 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { stockApi } from '../api';
-
-const DEFAULT_FACTS = [
-  "Stock market analysis can reveal fascinating patterns in company performance",
-  "Many of today's tech giants started in small garages or dorm rooms",
-  "Market capitalization reflects investor confidence in a company's future",
-  "Historical stock data can tell stories about innovation and economic shifts",
-  "The NYSE can process billions of shares in a single trading day",
-];
+import { DEFAULT_FACTS } from '../constants/funFacts';
 
 interface LoadingScreenProps {
   message?: string;
@@ -35,6 +28,7 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({
           }
         } catch (error) {
           // Keep using default facts on error
+          console.error('Failed to fetch fun facts:', error);
         }
       }
     };

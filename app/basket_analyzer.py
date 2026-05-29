@@ -399,6 +399,8 @@ def analyze_basket(
             # Get company info
             info = get_ticker_info(ticker)
             company_name = info.get("company_name") or ticker
+            sector = info.get("sector")
+            industry = info.get("industry")
             
             # Store for batch news fetch
             ticker_info_list.append({
@@ -410,6 +412,8 @@ def analyze_basket(
                 BasketTickerResult(
                     ticker=ticker,
                     company_name=company_name,
+                    sector=sector,
+                    industry=industry,
                     start_price=round(start_price, 2),
                     end_price=round(end_price, 2),
                     total_change_pct=round(total_change_pct, 2),

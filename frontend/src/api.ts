@@ -79,6 +79,8 @@ export interface ChatResponse {
 export interface BasketTickerResult {
   ticker: string;
   company_name?: string;
+  sector?: string;
+  industry?: string;
   start_price: number;
   end_price: number;
   total_change_pct: number;
@@ -224,6 +226,56 @@ export const stockApi = {
       // Extract filename from Content-Disposition header if available
       const contentDisposition = response.headers['content-disposition'];
       let filename = `${ticker}_analysis.pdf`;
+      if (contentDisposition) {
+        const filenameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+        if (filenameMatch && filenameMatch[1]) {
+          filename = filenameMatch[1].replace(/['"]/g, '');
+        }
+      }
+      
+      link.setAttribute('download', filename);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (error: unknown) {
+      if (error && typeof error === 'object' && 'response' in error) {
+        const err = error as { response?: { status?: number; data?: { detail?: string } } };
+        if (err.response?.status === 429) {
+          throw new Error(err.response.data?.detail || 'Rate limit reached. Please wait a moment before trying again.', { cause: error });
+        }
+      }
+      throw error;
+    }
+  },
+
+  downloadBasketPdf: async (data: {
+    tickers: string[];
+    start_date: string;
+    end_date: string;
+    include_news?: boolean;
+    include_competitors?: boolean;
+    include_macro?: boolean;
+  }) => {
+    try {
+      const { include_news, include_competitors, include_macro, ...bodyData } = data;
+      const response = await api.post('/basket/pdf', bodyData, {
+        params: {
+          include_news,
+          include_competitors,
+          include_macro,
+        },
+        responseType: 'blob',
+      });
+      
+      // Create download link
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      
+      // Extract filename from Content-Disposition header if available
+      const contentDisposition = response.headers['content-disposition'];
+      let filename = 'basket_analysis.pdf';
       if (contentDisposition) {
         const filenameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
         if (filenameMatch && filenameMatch[1]) {

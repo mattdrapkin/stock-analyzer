@@ -120,6 +120,7 @@ const App: React.FC = () => {
   const [basketHolisticSummaryExpanded, setBasketHolisticSummaryExpanded] = useState(true);
   const [basketFilterNewsOnly, setBasketFilterNewsOnly] = useState(false);
   const [basketSortOption, setBasketSortOption] = useState<'biggest_winners' | 'biggest_losers' | 'alphabetical'>('biggest_winners');
+  const [basketSectorFilter, setBasketSectorFilter] = useState<string>('all');
 
   // Collapsible sections state
   const [holisticSummaryExpanded, setHolisticSummaryExpanded] = useState(true);
@@ -352,6 +353,30 @@ const App: React.FC = () => {
     }
   };
 
+  const handleDownloadBasketPdf = async () => {
+    if (!basketAnalysis) return;
+    
+    setDownloadingPdf(true);
+    try {
+      const resolvedEnd = basketEndDate || new Date();
+      const resolvedStart = basketStartDate || new Date(new Date().setMonth(resolvedEnd.getMonth() - 3));
+      
+      await stockApi.downloadBasketPdf({
+        tickers: basketAnalysis.tickers,
+        start_date: format(resolvedStart, 'yyyy-MM-dd'),
+        end_date: format(resolvedEnd, 'yyyy-MM-dd'),
+        include_news: true,
+        include_competitors: false,
+        include_macro: false,
+      });
+    } catch (err) {
+      console.error('Basket PDF download error:', err);
+      alert('Failed to download PDF. Please try again.');
+    } finally {
+      setDownloadingPdf(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
       {/* Header */}
@@ -392,6 +417,17 @@ const App: React.FC = () => {
               {viewMode === 'single' && analysis && (
                 <button
                   onClick={handleDownloadPdf}
+                  disabled={downloadingPdf}
+                  className="flex items-center gap-2 px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors"
+                  title="Download PDF Report"
+                >
+                  {downloadingPdf ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                  <span>Download Report</span>
+                </button>
+              )}
+              {viewMode === 'basket' && basketAnalysis && (
+                <button
+                  onClick={handleDownloadBasketPdf}
                   disabled={downloadingPdf}
                   className="flex items-center gap-2 px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors"
                   title="Download PDF Report"
@@ -815,7 +851,7 @@ const App: React.FC = () => {
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-4 mb-6 pb-4 border-b border-slate-200">
+                  <div className="flex items-center gap-4 mb-6 pb-4 border-b border-slate-200 flex-wrap">
                     <label className="flex items-center gap-2 cursor-pointer">
                       <input
                         type="checkbox"
@@ -825,6 +861,24 @@ const App: React.FC = () => {
                       />
                       <span className="text-sm text-slate-700">Show only with news</span>
                     </label>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-slate-500">Filter by:</span>
+                      <select
+                        value={basketSectorFilter}
+                        onChange={(e) => setBasketSectorFilter(e.target.value)}
+                        className="text-sm border border-slate-300 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        aria-label="Filter by sector or industry"
+                      >
+                        <option value="all">All Sectors/Industries</option>
+                        {(() => {
+                          const uniqueSectors = [...new Set(basketAnalysis.results.map(r => r.sector).filter(Boolean))];
+                          const uniqueIndustries = [...new Set(basketAnalysis.results.map(r => r.industry).filter(Boolean))];
+                          return [...uniqueSectors, ...uniqueIndustries].sort().map(item => (
+                            <option key={item} value={item}>{item}</option>
+                          ));
+                        })()}
+                      </select>
+                    </div>
                     <div className="flex items-center gap-2">
                       <span className="text-sm text-slate-500">Sort by:</span>
                       <select
@@ -847,6 +901,13 @@ const App: React.FC = () => {
                       // Filter by news
                       if (basketFilterNewsOnly) {
                         filteredResults = filteredResults.filter(r => r.news_cards && r.news_cards.length > 0);
+                      }
+
+                      // Filter by sector/industry
+                      if (basketSectorFilter !== 'all') {
+                        filteredResults = filteredResults.filter(r => 
+                          r.sector === basketSectorFilter || r.industry === basketSectorFilter
+                        );
                       }
 
                       // Sort results
@@ -1079,6 +1140,13 @@ const BasketResultCard: React.FC<{ result: BasketTickerResult; rank: number }> =
               </span>
             )}
           </div>
+          {(result.sector || result.industry) && (
+            <div className="text-xs text-slate-400 mb-1">
+              {result.sector && <span>{result.sector}</span>}
+              {result.sector && result.industry && <span> • </span>}
+              {result.industry && <span>{result.industry}</span>}
+            </div>
+          )}
           <div className="flex items-center gap-3 text-sm">
             <span className="text-slate-500">
               {result.start_price !== null ? `$${result.start_price.toFixed(2)}` : 'N/A'} → {result.end_price !== null ? `$${result.end_price.toFixed(2)}` : 'N/A'}
