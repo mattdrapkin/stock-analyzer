@@ -83,6 +83,7 @@ export interface BasketTickerResult {
   end_price: number;
   total_change_pct: number;
   direction: 'up' | 'down';
+  news_cards: NewsCard[];
 }
 
 export interface BasketAnalysisResponse {
@@ -91,6 +92,8 @@ export interface BasketAnalysisResponse {
   period_end: string;
   results: BasketTickerResult[];
   total_analyzed: number;
+  holistic_summary?: string;
+  news_source: string;
 }
 
 export const stockApi = {
@@ -150,8 +153,18 @@ export const stockApi = {
     tickers: string[];
     start_date: string;
     end_date: string;
+    include_news?: boolean;
+    include_competitors?: boolean;
+    include_macro?: boolean;
   }) => {
-    const response = await api.post<BasketAnalysisResponse>('/basket', data);
+    const { include_news, include_competitors, include_macro, ...bodyData } = data;
+    const response = await api.post<BasketAnalysisResponse>('/basket', bodyData, {
+      params: {
+        include_news,
+        include_competitors,
+        include_macro,
+      }
+    });
     return response.data;
   }
 };
