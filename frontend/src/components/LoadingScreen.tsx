@@ -1,58 +1,61 @@
 import React, { useState, useEffect } from 'react';
+import { stockApi } from '../api';
 
-const PRINCETON_FACTS = [
-  "Princeton University was founded in 1746 as the College of New Jersey",
-  "The Princeton Endowment is one of the largest university endowments in the world",
-  "Princeton has produced 5 US Presidents and 3 Supreme Court Justices",
-  "The endowment supports over 1,000 undergraduate scholarships annually",
-  "Princeton's campus is known for its Collegiate Gothic architecture",
-  "The university was renamed Princeton in 1896",
-  "Princeton's endowment has funded groundbreaking research in physics and economics",
-  "Albert Einstein was a faculty member at the Institute for Advanced Study in Princeton",
-  "The Princeton Endowment helped establish the Princeton Plasma Physics Laboratory",
-  "Princeton's financial aid program was the first to replace loans with grants",
-  "The endowment supports over 500 faculty positions across disciplines",
-  "Princeton has produced 49 Nobel Prize winners",
-  "The university's library system holds over 14 million holdings",
-  "Princeton's endowment has supported sustainability initiatives across campus",
-  "The Princeton Investment Company (PRINCO) manages the university's endowment",
-  "Princeton was the fourth university established in British North America",
-  "The endowment has helped Princeton maintain its need-blind admission policy",
-  "Princeton's Woodrow Wilson School was renamed in 2020 to the Princeton School of Public and International Affairs",
-  "The university's endowment supports innovative teaching and learning initiatives",
-  "Princeton's campus spans 500 acres in central New Jersey",
-  "The endowment has funded the construction of state-of-the-art research facilities",
-  "Princeton has produced numerous Rhodes Scholars and Marshall Scholars",
-  "The Princeton Endowment has consistently delivered strong long-term returns",
-  "Princeton's art museum houses over 100,000 works of art",
-  "The endowment supports interdisciplinary research centers and programs",
-  "Princeton was the first university to offer a course in American history",
-  "The university's endowment helps fund international study opportunities for students",
-  "Princeton has produced leaders in business, government, and academia worldwide",
-  "The Princeton Endowment supports the university's commitment to excellence and accessibility",
-  "Princeton's faculty includes members of the National Academy of Sciences and other prestigious academies",
-  "The endowment has enabled Princeton to maintain its 5:1 student-to-faculty ratio"
+const DEFAULT_FACTS = [
+  "Stock market analysis can reveal fascinating patterns in company performance",
+  "Many of today's tech giants started in small garages or dorm rooms",
+  "Market capitalization reflects investor confidence in a company's future",
+  "Historical stock data can tell stories about innovation and economic shifts",
+  "The NYSE can process billions of shares in a single trading day",
 ];
 
-const LoadingScreen: React.FC<{ message?: string }> = ({ message = 'Analyzing...' }) => {
+interface LoadingScreenProps {
+  message?: string;
+  ticker?: string;
+  basket?: string[];
+}
+
+const LoadingScreen: React.FC<LoadingScreenProps> = ({ 
+  message = 'Analyzing...', 
+  ticker, 
+  basket 
+}) => {
   const [currentFactIndex, setCurrentFactIndex] = useState(0);
   const [isTransitioning, setIsTransitioning] = useState(false);
-  const [shuffledFacts] = useState(() => [...PRINCETON_FACTS].sort(() => Math.random() - 0.5));
+  const [facts, setFacts] = useState<string[]>(DEFAULT_FACTS);
 
   useEffect(() => {
-    // Rotate facts every 4 seconds
+    // Fetch fun facts if ticker or basket is provided
+    const fetchFunFacts = async () => {
+      if (ticker || basket) {
+        try {
+          const response = await stockApi.getFunFacts({ ticker, basket });
+          if (response.facts && response.facts.length > 0) {
+            setFacts(response.facts);
+          }
+        } catch (error) {
+          // Keep using default facts on error
+        }
+      }
+    };
+
+    fetchFunFacts();
+  }, [ticker, basket, stockApi.getFunFacts]);
+
+  useEffect(() => {
+    // Rotate facts every 8 seconds
     const interval = setInterval(() => {
       setIsTransitioning(true);
       setTimeout(() => {
-        setCurrentFactIndex((prev) => (prev + 1) % shuffledFacts.length);
+        setCurrentFactIndex((prev) => (prev + 1) % facts.length);
         setIsTransitioning(false);
       }, 500); // Wait for fade out
-    }, 4000);
+    }, 8000);
 
     return () => clearInterval(interval);
-  }, [shuffledFacts]);
+  }, [facts]);
 
-  const currentFact = shuffledFacts[currentFactIndex] || PRINCETON_FACTS[0];
+  const currentFact = facts[currentFactIndex] || DEFAULT_FACTS[0];
   return (
     <div className="bg-gradient-to-br from-indigo-50 via-white to-amber-50 rounded-2xl p-8 text-center">
       <div className="text-center">

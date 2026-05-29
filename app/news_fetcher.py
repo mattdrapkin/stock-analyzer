@@ -14,6 +14,7 @@ News categories
 import os
 import json
 import logging
+import re
 from datetime import date, datetime, timedelta
 from typing import List, Dict, Optional, Tuple
 
@@ -76,6 +77,9 @@ def _parse_news_cards_from_response(content: str) -> List[Dict]:
         text = re.sub(r'\n?```$', '', text)
         text = text.strip()
 
+    # Store original content for error logging
+    response_content = text
+
     try:
         data = json.loads(text)
         articles = data.get("articles", [])
@@ -137,8 +141,9 @@ def _parse_news_cards_from_response(content: str) -> List[Dict]:
                 "relevance": (article.get("relevance") or "").strip() or None,
             })
         return validated
-    except (json.JSONDecodeError, KeyError, TypeError):
-        logger.warning("Failed to parse structured news cards from OpenAI response")
+    except (json.JSONDecodeError, KeyError, TypeError) as e:
+        logger.warning(f"Failed to parse structured news cards from OpenAI response: {e}")
+        logger.debug(f"Response content that failed parsing: {response_content[:500] if 'response_content' in locals() else 'N/A'}")
         return []
 
 

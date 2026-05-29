@@ -96,6 +96,15 @@ export interface BasketAnalysisResponse {
   news_source: string;
 }
 
+export interface FunFactsRequest {
+  ticker?: string;
+  basket?: string[];
+}
+
+export interface FunFactsResponse {
+  facts: string[];
+}
+
 export const stockApi = {
   getAnalysis: async (ticker: string, params?: {
     start_date?: string;
@@ -166,6 +175,21 @@ export const stockApi = {
           include_macro,
         }
       });
+      return response.data;
+    } catch (error: unknown) {
+      if (error && typeof error === 'object' && 'response' in error) {
+        const err = error as { response?: { status?: number; data?: { detail?: string } } };
+        if (err.response?.status === 429) {
+          throw new Error(err.response.data?.detail || 'Rate limit reached. Please wait a moment before trying again.', { cause: error });
+        }
+      }
+      throw error;
+    }
+  },
+
+  getFunFacts: async (data: FunFactsRequest) => {
+    try {
+      const response = await api.post<FunFactsResponse>('/fun-facts', data);
       return response.data;
     } catch (error: unknown) {
       if (error && typeof error === 'object' && 'response' in error) {

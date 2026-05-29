@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing import Optional, List
 from datetime import date, datetime
 from enum import Enum
@@ -127,3 +127,18 @@ class BasketAnalysisResponse(BaseModel):
     total_analyzed: int
     holistic_summary: Optional[str] = None  # AI-generated summary of basket movement drivers
     news_source: str = "None"  # Which news source was used (OpenAI, Mock, None)
+
+
+class FunFactsRequest(BaseModel):
+    ticker: Optional[str] = None
+    basket: Optional[List[str]] = None
+
+    @model_validator(mode='after')
+    def validate_request(self):
+        if not self.ticker and not self.basket:
+            raise ValueError("Either ticker or basket must be provided")
+        return self
+
+
+class FunFactsResponse(BaseModel):
+    facts: List[str]

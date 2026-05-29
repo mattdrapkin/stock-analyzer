@@ -103,6 +103,9 @@ const App: React.FC = () => {
   // Threshold state
   const [minMovementThreshold, setMinMovementThreshold] = useState(2.0);
 
+  // Sort state
+  const [movementSort, setMovementSort] = useState<'date' | 'biggest' | 'smallest'>('date');
+
   // Header navigation state
   const [activeSection, setActiveSection] = useState<string>('');
 
@@ -110,6 +113,27 @@ const App: React.FC = () => {
   const handleSectionClick = React.useCallback((sectionId: string) => {
     setActiveSection(sectionId);
   }, []);
+
+  // Sort movements based on selected sort option
+  const sortedMovements = React.useMemo(() => {
+    if (!analysis) return [];
+    
+    const movements = [...analysis.movements];
+    
+    switch (movementSort) {
+      case 'date':
+        // Default: already sorted by date (newest first from API)
+        return movements;
+      case 'biggest':
+        // Sort by absolute change percentage, biggest first
+        return movements.sort((a, b) => Math.abs(b.change_pct) - Math.abs(a.change_pct));
+      case 'smallest':
+        // Sort by absolute change percentage, smallest first
+        return movements.sort((a, b) => Math.abs(a.change_pct) - Math.abs(b.change_pct));
+      default:
+        return movements;
+    }
+  }, [analysis, movementSort]);
 
   // Define navigation sections based on view mode and data
   const navSections: Section[] = [
@@ -503,7 +527,7 @@ const App: React.FC = () => {
 
             {loading && (
               <div className="flex justify-center py-12">
-                <LoadingScreen message="Analyzing Stock..." />
+                <LoadingScreen message="Analyzing Stock..." ticker={ticker} />
               </div>
             )}
 
@@ -581,14 +605,29 @@ const App: React.FC = () => {
 
                 {/* Right Column: Movements Timeline */}
                 <div id="movements" className="lg:col-span-2 space-y-4">
-                  <h3 className="text-lg font-bold flex items-center gap-2 mb-4">
-                    Significant Movements
-                    <span className="bg-slate-200 text-slate-600 text-xs px-2 py-0.5 rounded-full">
-                      {analysis.total_movements}
-                    </span>
-                  </h3>
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-bold flex items-center gap-2">
+                      Significant Movements
+                      <span className="bg-slate-200 text-slate-600 text-xs px-2 py-0.5 rounded-full">
+                        {analysis.total_movements}
+                      </span>
+                    </h3>
+                    <div className="flex items-center gap-2">
+                      <label className="text-sm text-slate-600 font-medium">Sort by:</label>
+                      <select
+                        value={movementSort}
+                        onChange={(e) => setMovementSort(e.target.value as 'date' | 'biggest' | 'smallest')}
+                        title="Sort movements by date or magnitude"
+                        className="px-3 py-1.5 bg-slate-100 border-transparent focus:bg-white focus:ring-2 focus:ring-indigo-500 rounded-lg outline-none text-sm font-medium transition-all cursor-pointer"
+                      >
+                        <option value="date">Date</option>
+                        <option value="biggest">Biggest Moves</option>
+                        <option value="smallest">Smallest Moves</option>
+                      </select>
+                    </div>
+                  </div>
 
-                  {analysis.movements.map((move, i) => (
+                  {sortedMovements.map((move, i) => (
                     <MovementCard key={i} move={move} batchNewsCards={analysis.batch_news_cards} />
                   ))}
 

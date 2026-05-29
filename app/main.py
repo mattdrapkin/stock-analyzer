@@ -25,12 +25,15 @@ from .models import (
     BasketAnalysisResponse,
     ChatRequest,
     ChatResponse,
+    FunFactsRequest,
+    FunFactsResponse,
     HealthResponse,
     TickerAnalysis,
 )
 from .analyzer import build_analysis
 from .basket_analyzer import analyze_basket
 from .chat import chat_with_ticker, has_openai_key
+from .fun_facts import generate_fun_facts
 from .news_fetcher import has_openai_key as news_has_openai_key, RateLimitError
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -386,4 +389,39 @@ def analyze_basket_endpoint(
         raise HTTPException(status_code=429, detail=str(e))
     except Exception as e:
         logger.exception(f"Unexpected error in basket analysis")
+        raise HTTPException(status_code=500, detail=f"Internal error: {e}")
+
+
+@app.post(
+    "/api/v1/fun-facts",
+    response_model=FunFactsResponse,
+    tags=["Fun Facts"],
+    summary="Generate fun facts about a ticker or basket",
+)
+def get_fun_facts(
+    body: FunFactsRequest,
+) -> FunFactsResponse:
+    """
+    Generate interesting, fun facts about a stock ticker or basket of stocks using OpenAI.
+
+    **Example request body for single ticker:**
+    ```json
+    {
+      "ticker": "AAPL"
+    }
+    ```
+
+    **Example request body for basket:**
+    ```json
+    {
+      "basket": ["AAPL", "MSFT", "GOOGL"]
+    }
+    ```
+
+    Returns 5-8 fun facts relevant to the provided ticker(s).
+    """
+    try:
+        return generate_fun_facts(body)
+    except Exception as e:
+        logger.exception(f"Unexpected error generating fun facts")
         raise HTTPException(status_code=500, detail=f"Internal error: {e}")
