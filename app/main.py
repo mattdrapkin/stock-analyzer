@@ -10,6 +10,7 @@ POST /api/v1/chat/{ticker}                  — multi-turn chat about a ticker
 
 import os
 import logging
+import json
 from datetime import date, timedelta
 from typing import Optional
 
@@ -19,6 +20,7 @@ load_dotenv()
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from .models import (
     BasketAnalysisRequest,
@@ -48,6 +50,31 @@ logger = logging.getLogger(__name__)
 
 CACHE_TTL: int = int(os.getenv("CACHE_TTL_SECONDS", "1800"))
 
+
+class CustomJSONResponse(JSONResponse):
+    """Custom JSONResponse that converts NaN values to None for JSON compliance."""
+    def _replace_nan(self, obj):
+        """Recursively replace NaN values with None."""
+        import math
+        if isinstance(obj, float) and math.isnan(obj):
+            return None
+        elif isinstance(obj, dict):
+            return {k: self._replace_nan(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [self._replace_nan(item) for item in obj]
+        return obj
+
+    def render(self, content) -> bytes:
+        cleaned_content = self._replace_nan(content)
+        return json.dumps(
+            cleaned_content,
+            ensure_ascii=False,
+            allow_nan=False,
+            indent=None,
+            separators=(",", ":"),
+        ).encode("utf-8")
+
+
 app = FastAPI(
     title="Stock Movement Analyzer",
     description=(
@@ -57,6 +84,7 @@ app = FastAPI(
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
+    default_response_class=CustomJSONResponse,
 )
 
 app.add_middleware(

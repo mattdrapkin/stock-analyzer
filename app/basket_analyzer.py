@@ -44,59 +44,74 @@ def _parse_basket_news_cards_from_response(content: str) -> Dict[str, List[Dict]
         text = re.sub(r'\n?```$', '', text)
         text = text.strip()
 
-    try:
-        data = json.loads(text)
-        ticker_news = data.get("ticker_news", {})
-        if not isinstance(ticker_news, dict):
-            return {}
+    # Try to extract valid JSON by progressively truncating from the end
+    # This handles cases where OpenAI truncates the response mid-JSON
+    original_length = len(text)
+    for i in range(min(original_length, 1000)):  # Increased limit for longer responses
+        try:
+            data = json.loads(text)
+            ticker_news = data.get("ticker_news", {})
+            if not isinstance(ticker_news, dict):
+                return {}
 
-        validated: Dict[str, List[Dict]] = {}
-        for ticker, articles in ticker_news.items():
-            if not isinstance(articles, list):
-                continue
-            
-            validated_articles = []
-            for article in articles:
-                if not isinstance(article, dict):
+            validated: Dict[str, List[Dict]] = {}
+            for ticker, articles in ticker_news.items():
+                if not isinstance(articles, list):
                     continue
                 
-                title = (article.get("title") or "").strip()
-                summary = (article.get("summary") or "").strip()
-                if not title or not summary:
-                    continue
+                validated_articles = []
+                for article in articles:
+                    if not isinstance(article, dict):
+                        continue
+                    
+                    title = (article.get("title") or "").strip()
+                    summary = (article.get("summary") or "").strip()
+                    if not title or not summary:
+                        continue
 
-                cat = article.get("category", "company")
-                if cat not in ("company", "competitor", "macro"):
-                    cat = "company"
+                    cat = article.get("category", "company")
+                    if cat not in ("company", "competitor", "macro"):
+                        cat = "company"
 
-                url = article.get("url") or None
-                if url and not url.startswith("http"):
-                    url = None
+                    url = article.get("url") or None
+                    if url and not url.startswith("http"):
+                        url = None
 
-                # Normalize date to YYYY-MM-DD format
-                date_str = article.get("date")
-                if date_str:
-                    try:
-                        parsed_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-                        date_str = parsed_date.isoformat()
-                    except ValueError:
-                        date_str = None
+                    # Normalize date to YYYY-MM-DD format
+                    date_str = article.get("date")
+                    if date_str:
+                        try:
+                            parsed_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+                            date_str = parsed_date.isoformat()
+                        except ValueError:
+                            date_str = None
 
-                validated_articles.append({
-                    "title": title,
-                    "summary": summary,
-                    "date": date_str,
-                    "source_name": (article.get("source_name") or "").strip() or None,
-                    "url": url,
-                    "category": cat,
-                    "relevance": (article.get("relevance") or "").strip() or None,
-                })
-            
-            validated[ticker] = validated_articles
-        return validated
-    except (json.JSONDecodeError, KeyError, TypeError):
-        logger.warning("Failed to parse structured basket news cards from OpenAI response")
-        return {}
+                    validated_articles.append({
+                        "title": title,
+                        "summary": summary,
+                        "date": date_str,
+                        "source_name": (article.get("source_name") or "").strip() or None,
+                        "url": url,
+                        "category": cat,
+                        "relevance": (article.get("relevance") or "").strip() or None,
+                    })
+                
+                validated[ticker] = validated_articles
+            logger.info(f"Successfully parsed basket news after truncating {original_length - len(text)} characters")
+            return validated
+        except json.JSONDecodeError as e:
+            # Remove last character and try again
+            text = text[:-1]
+            if not text:
+                logger.warning(f"Failed to parse structured basket news cards from OpenAI response: text became empty after {i} attempts")
+                return {}
+        except (KeyError, TypeError) as e:
+            logger.warning(f"Failed to process structured basket news cards from OpenAI response after JSON parsing: {e}")
+            logger.debug(f"Response content that caused processing error: {text[:500]}")
+            return {}
+
+    logger.warning(f"Failed to parse structured basket news cards from OpenAI response after {min(original_length, 1000)} attempts")
+    return {}
 
 
 def fetch_basket_news_batch(
@@ -280,12 +295,18 @@ Top performers:
 News coverage:
 {chr(10).join(news_summary_parts)}
 
-Please provide a 2-3 sentence holistic summary explaining:
-1. Overall basket movement direction and key drivers
-2. Common themes across stocks (sector trends, macro events, company-specific news)
-3. Why the biggest movers moved significantly
+Please provide a holistic summary in TWO CLEAR SEPARATE PARAGRAPHS:
 
-Be concise and focus on the most impactful factors. IMPORTANT: This is a web application interface, not a conversational chat. Never offer follow-up actions, suggest what the user can do next, or ask if they want additional information. Provide a complete, self-contained response.
+**First paragraph (1-2 sentences):** Explain the BROAD THEME driving the basket's overall movement. Focus on sector-wide trends, macro factors, commodity prices, or industry dynamics that affected most stocks. Be concise and high-level.
+
+**Second paragraph (2-3 sentences):** Provide more detailed analysis of specific securities and company-specific factors. Explain why the biggest movers moved significantly and any notable company-specific news.
+
+Format your response as:
+[BROAD THEME PARAGRAPH]
+
+[DETAILED ANALYSIS PARAGRAPH]
+
+IMPORTANT: This is a web application interface, not a conversational chat. Never offer follow-up actions, suggest what the user can do next, or ask if they want additional information. Provide a complete, self-contained response.
 """
     
     try:

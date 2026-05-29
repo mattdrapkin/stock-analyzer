@@ -25,9 +25,12 @@ import LoadingScreen from './components/LoadingScreen';
 const formatBasketSummary = (text: string, validTickers: string[]): React.ReactNode => {
   const parts: React.ReactNode[] = [];
   let lastIndex = 0;
-  
-  // Match ticker symbols (uppercase, 2-5 letters) followed by optional percentage (requires % sign)
-  const tickerRegex = /\b([A-Z]{2,5})\b(?:\s*\(?([+-]?\d+\.?\d*)%\)?\s*)?/g;
+
+  // Match ticker symbols with various formats:
+  // - Simple: AAPL, MSFT (2-5 uppercase letters)
+  // - With suffix: 2899.HK, RIO.L (letters/numbers + dot + letters)
+  // Followed by optional percentage (requires % sign)
+  const tickerRegex = /\b([A-Z]{2,5}(?:\.[A-Z]{1,3})?|[A-Z0-9]+\.[A-Z]{1,3})\b(?:\s*\(?([+-]?\d+\.?\d*)%\)?\s*)?/g;
   let match;
 
   while ((match = tickerRegex.exec(text)) !== null) {
@@ -35,10 +38,10 @@ const formatBasketSummary = (text: string, validTickers: string[]): React.ReactN
     if (match.index > lastIndex) {
       parts.push(text.slice(lastIndex, match.index));
     }
-    
+
     const ticker = match[1];
     const percentage = match[2];
-    
+
     // Only highlight if it's a valid ticker in the basket
     if (validTickers.includes(ticker)) {
       // Render ticker as bold
@@ -63,16 +66,38 @@ const formatBasketSummary = (text: string, validTickers: string[]): React.ReactN
       // Not a valid ticker, just add the matched text as-is
       parts.push(match[0]);
     }
-    
+
     lastIndex = match.index + match[0].length;
   }
-  
+
   // Add remaining text
   if (lastIndex < text.length) {
     parts.push(text.slice(lastIndex));
   }
-  
+
   return parts.length > 0 ? parts : text;
+};
+
+// Helper function to parse basket summary into broad theme and detailed analysis
+const parseBasketSummary = (text: string, validTickers: string[]): { broadTheme: React.ReactNode; detailedAnalysis: React.ReactNode } => {
+  const paragraphs = text.split('\n\n').filter(p => p.trim());
+  
+  if (paragraphs.length === 0) {
+    return { broadTheme: null, detailedAnalysis: null };
+  }
+  
+  if (paragraphs.length === 1) {
+    return {
+      broadTheme: formatBasketSummary(paragraphs[0], validTickers),
+      detailedAnalysis: null
+    };
+  }
+  
+  // First paragraph is broad theme, rest is detailed analysis
+  return {
+    broadTheme: formatBasketSummary(paragraphs[0], validTickers),
+    detailedAnalysis: formatBasketSummary(paragraphs.slice(1).join('\n\n'), validTickers)
+  };
 };
 
 const App: React.FC = () => {
@@ -92,6 +117,8 @@ const App: React.FC = () => {
   const [basketLoading, setBasketLoading] = useState(false);
   const [basketError, setBasketError] = useState<string | null>(null);
   const [basketHolisticSummaryExpanded, setBasketHolisticSummaryExpanded] = useState(true);
+  const [basketFilterNewsOnly, setBasketFilterNewsOnly] = useState(false);
+  const [basketSortOption, setBasketSortOption] = useState<'biggest_winners' | 'biggest_losers' | 'alphabetical'>('biggest_winners');
 
   // Collapsible sections state
   const [holisticSummaryExpanded, setHolisticSummaryExpanded] = useState(true);
@@ -700,7 +727,30 @@ const App: React.FC = () => {
                       onToggle={() => setBasketHolisticSummaryExpanded(!basketHolisticSummaryExpanded)}
                     >
                       <div className="prose prose-slate max-w-none">
-                        <p className="text-slate-700 leading-relaxed whitespace-pre-wrap">{formatBasketSummary(basketAnalysis.holistic_summary, basketAnalysis.tickers)}</p>
+                        {(() => {
+                          const { broadTheme, detailedAnalysis } = parseBasketSummary(basketAnalysis.holistic_summary, basketAnalysis.tickers);
+                          return (
+                            <div className="space-y-4">
+                              {broadTheme && (
+                                <div className="bg-gradient-to-r from-indigo-50 to-blue-50 border-l-4 border-indigo-500 p-4 rounded-r-lg">
+                                  <p className="text-slate-800 font-semibold leading-relaxed text-base">
+                                    {broadTheme}
+                                  </p>
+                                </div>
+                              )}
+                              {detailedAnalysis && (
+                                <div className="text-slate-700 leading-relaxed whitespace-pre-wrap">
+                                  {detailedAnalysis}
+                                </div>
+                              )}
+                              {!broadTheme && !detailedAnalysis && (
+                                <p className="text-slate-700 leading-relaxed whitespace-pre-wrap">
+                                  {formatBasketSummary(basketAnalysis.holistic_summary, basketAnalysis.tickers)}
+                                </p>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </div>
                     </CollapsibleSection>
                   </div>
@@ -719,10 +769,53 @@ const App: React.FC = () => {
                     </div>
                   </div>
 
+                  <div className="flex items-center gap-4 mb-6 pb-4 border-b border-slate-200">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={basketFilterNewsOnly}
+                        onChange={(e) => setBasketFilterNewsOnly(e.target.checked)}
+                        className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                      />
+                      <span className="text-sm text-slate-700">Show only with news</span>
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-slate-500">Sort by:</span>
+                      <select
+                        value={basketSortOption}
+                        onChange={(e) => setBasketSortOption(e.target.value as 'biggest_winners' | 'biggest_losers' | 'alphabetical')}
+                        className="text-sm border border-slate-300 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        aria-label="Sort basket results"
+                      >
+                        <option value="biggest_winners">Biggest winners</option>
+                        <option value="biggest_losers">Biggest losers</option>
+                        <option value="alphabetical">Alphabetical</option>
+                      </select>
+                    </div>
+                  </div>
+
                   <div className="space-y-3">
-                    {basketAnalysis.results.map((result, i) => (
-                      <BasketResultCard key={i} result={result} rank={i + 1} />
-                    ))}
+                    {(() => {
+                      let filteredResults = [...basketAnalysis.results];
+
+                      // Filter by news
+                      if (basketFilterNewsOnly) {
+                        filteredResults = filteredResults.filter(r => r.news_cards && r.news_cards.length > 0);
+                      }
+
+                      // Sort results
+                      if (basketSortOption === 'biggest_winners') {
+                        filteredResults.sort((a, b) => (b.total_change_pct || 0) - (a.total_change_pct || 0));
+                      } else if (basketSortOption === 'biggest_losers') {
+                        filteredResults.sort((a, b) => (a.total_change_pct || 0) - (b.total_change_pct || 0));
+                      } else if (basketSortOption === 'alphabetical') {
+                        filteredResults.sort((a, b) => a.ticker.localeCompare(b.ticker));
+                      }
+
+                      return filteredResults.map((result, i) => (
+                        <BasketResultCard key={result.ticker} result={result} rank={i + 1} />
+                      ));
+                    })()}
 
                     {basketAnalysis.results.length === 0 && (
                       <div className="bg-slate-50 p-12 rounded-2xl text-center border border-slate-200 border-dashed">
@@ -942,13 +1035,13 @@ const BasketResultCard: React.FC<{ result: BasketTickerResult; rank: number }> =
           </div>
           <div className="flex items-center gap-3 text-sm">
             <span className="text-slate-500">
-              ${result.start_price.toFixed(2)} → ${result.end_price.toFixed(2)}
+              {result.start_price !== null ? `$${result.start_price.toFixed(2)}` : 'N/A'} → {result.end_price !== null ? `$${result.end_price.toFixed(2)}` : 'N/A'}
             </span>
           </div>
         </div>
         <div className={`text-right shrink-0`}>
           <div className={`text-xl font-bold ${isUp ? 'text-emerald-600' : 'text-rose-600'}`}>
-            {isUp ? '+' : ''}{result.total_change_pct.toFixed(1)}%
+            {result.total_change_pct !== null ? `${isUp ? '+' : ''}${result.total_change_pct.toFixed(1)}%` : 'N/A'}
           </div>
           <div className={`text-xs font-bold uppercase ${isUp ? 'text-emerald-500' : 'text-rose-500'}`}>
             {result.direction}
