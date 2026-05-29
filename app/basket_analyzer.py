@@ -47,12 +47,15 @@ Required JSON format:
 }
 
 Rules:
-- Return 3 to 5 of the most impactful articles per ticker ordered by date descending
+- CRITICAL: Attempt to find at least 1 news article for AT LEAST 50% of the tickers provided
+- Prioritize finding diverse coverage across different companies rather than many articles for one company
+- Return 2 to 4 articles per ticker (not 3-5) to allow room for more tickers
+- If you find news for fewer than 50% of tickers, expand your search to include broader company news, sector news, or recent developments
 - category must be exactly one of: "company", "competitor", "macro"
 - date must be in YYYY-MM-DD format, or null if unknown
 - url must be a real, complete URL starting with https://, or null if unavailable
 - title, summary, and relevance must be non-empty strings
-- If no news found for a ticker, return an empty array for that ticker
+- If no news found for a ticker after thorough search, return an empty array for that ticker
 - Do not include any text outside the JSON object
 """
 
@@ -173,7 +176,9 @@ def fetch_basket_news_batch(
             f"published between {from_date.isoformat()} and {to_date.isoformat()}. "
             f"Cover: {categories_str}. "
             f"Focus on news that would explain significant stock price movements. "
-            f"Return 3-5 articles per company if available."
+            f"CRITICAL: Ensure you find news for at least 50% of the companies listed. "
+            f"Prioritize diverse coverage across different companies over many articles for one company. "
+            f"Return 2-4 articles per company if available."
         )
 
         response = client.chat.completions.create(
