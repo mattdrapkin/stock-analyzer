@@ -10,7 +10,7 @@ from openai import OpenAI, OpenAIError
 
 from .models import FunFactsRequest, FunFactsResponse
 from .news_fetcher import has_openai_key
-from .rate_limit_utils import is_rate_limit_error, format_rate_limit_error
+from .rate_limit_utils import is_rate_limit_error, create_rate_limit_error, RateLimitError
 
 logger = logging.getLogger(__name__)
 
@@ -112,17 +112,7 @@ def generate_fun_facts(request: FunFactsRequest) -> FunFactsResponse:
     except OpenAIError as e:
         if is_rate_limit_error(e):
             logger.warning(f"Rate limit hit in fun facts: {e}")
-            return FunFactsResponse(
-                facts=[
-                    "Index fund flows can create persistent price pressure on high-float stocks, independent of fundamentals",
-                    "Private market valuations often lead public market comps by 6-18 months due to information asymmetry",
-                ]
-            )
+            raise create_rate_limit_error(e) from e
         else:
             logger.error(f"OpenAI API error in fun facts: {e}")
-            return FunFactsResponse(
-                facts=[
-                    "Index fund flows can create persistent price pressure on high-float stocks, independent of fundamentals",
-                    "Private market valuations often lead public market comps by 6-18 months due to information asymmetry",
-                ]
-            )
+            raise

@@ -36,7 +36,8 @@ from .analyzer import build_analysis
 from .basket_analyzer import analyze_basket
 from .chat import chat_with_ticker, has_openai_key
 from .fun_facts import generate_fun_facts
-from .news_fetcher import has_openai_key as news_has_openai_key, RateLimitError
+from .news_fetcher import has_openai_key as news_has_openai_key
+from .rate_limit_utils import RateLimitError
 from .pdf_generator import generate_analysis_pdf, generate_basket_pdf
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -451,6 +452,9 @@ def get_fun_facts(
     """
     try:
         return generate_fun_facts(body)
+    except RateLimitError as e:
+        logger.warning(f"Rate limit error in fun facts: {e}")
+        raise HTTPException(status_code=429, detail=str(e))
     except Exception as e:
         logger.exception(f"Unexpected error generating fun facts")
         raise HTTPException(status_code=500, detail=f"Internal error: {e}")

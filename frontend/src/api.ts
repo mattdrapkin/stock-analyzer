@@ -6,6 +6,73 @@ const api = axios.create({
   baseURL: API_BASE_URL,
 });
 
+export interface RateLimitErrorInfo {
+  isRateLimit: boolean;
+  limitType?: string;
+  waitTime?: number;
+  message: string;
+}
+
+export interface RateLimitError extends Error {
+  rateLimitInfo?: RateLimitErrorInfo;
+}
+
+/**
+ * Parse rate limit error details from an error message.
+ * Extracts limit type and wait time if available.
+ */
+function parseRateLimitError(message: string): RateLimitErrorInfo {
+  const lowerMessage = message.toLowerCase();
+  
+  // Check if it's a rate limit error
+  const isRateLimit = lowerMessage.includes('rate limit') || 
+                      lowerMessage.includes('rate_limit_exceeded') ||
+                      lowerMessage.includes('quota exceeded') ||
+                      lowerMessage.includes('too many requests');
+  
+  if (!isRateLimit) {
+    return { isRateLimit: false, message };
+  }
+  
+  // Extract limit type
+  let limitType: string | undefined;
+  if (lowerMessage.includes('rpm') || lowerMessage.includes('requests per minute')) {
+    limitType = 'rpm';
+  } else if (lowerMessage.includes('rpd') || lowerMessage.includes('requests per day')) {
+    limitType = 'rpd';
+  } else if (lowerMessage.includes('tpm') || lowerMessage.includes('tokens per minute')) {
+    limitType = 'tpm';
+  } else if (lowerMessage.includes('token') && lowerMessage.includes('limit')) {
+    limitType = 'token';
+  } else if (lowerMessage.includes('quota')) {
+    limitType = 'quota';
+  }
+  
+  // Extract wait time (in seconds)
+  let waitTime: number | undefined;
+  const secondsMatch = message.match(/(\d+\.?\d*)\s*seconds?/i);
+  if (secondsMatch) {
+    waitTime = parseFloat(secondsMatch[1]);
+  } else {
+    const minutesMatch = message.match(/(\d+\.?\d*)\s*minutes?/i);
+    if (minutesMatch) {
+      waitTime = parseFloat(minutesMatch[1]) * 60;
+    } else {
+      const hoursMatch = message.match(/(\d+\.?\d*)\s*hours?/i);
+      if (hoursMatch) {
+        waitTime = parseFloat(hoursMatch[1]) * 3600;
+      }
+    }
+  }
+  
+  return {
+    isRateLimit: true,
+    limitType,
+    waitTime,
+    message
+  };
+}
+
 export interface NewsArticle {
   title: string;
   source: string;
@@ -126,7 +193,11 @@ export const stockApi = {
       if (error && typeof error === 'object' && 'response' in error) {
         const err = error as { response?: { status?: number; data?: { detail?: string } } };
         if (err.response?.status === 429) {
-          throw new Error(err.response.data?.detail || 'Rate limit reached. Please wait a moment before trying again.', { cause: error });
+          const message = err.response.data?.detail || 'Rate limit reached. Please wait a moment before trying again.';
+          const rateLimitInfo = parseRateLimitError(message);
+          const enhancedError = new Error(message, { cause: error }) as RateLimitError;
+          enhancedError.rateLimitInfo = rateLimitInfo;
+          throw enhancedError;
         }
       }
       throw error;
@@ -148,7 +219,11 @@ export const stockApi = {
       if (error && typeof error === 'object' && 'response' in error) {
         const err = error as { response?: { status?: number; data?: { detail?: string } } };
         if (err.response?.status === 429) {
-          throw new Error(err.response.data?.detail || 'Rate limit reached. Please wait a moment before trying again.', { cause: error });
+          const message = err.response.data?.detail || 'Rate limit reached. Please wait a moment before trying again.';
+          const rateLimitInfo = parseRateLimitError(message);
+          const enhancedError = new Error(message, { cause: error }) as RateLimitError;
+          enhancedError.rateLimitInfo = rateLimitInfo;
+          throw enhancedError;
         }
       }
       throw error;
@@ -182,7 +257,11 @@ export const stockApi = {
       if (error && typeof error === 'object' && 'response' in error) {
         const err = error as { response?: { status?: number; data?: { detail?: string } } };
         if (err.response?.status === 429) {
-          throw new Error(err.response.data?.detail || 'Rate limit reached. Please wait a moment before trying again.', { cause: error });
+          const message = err.response.data?.detail || 'Rate limit reached. Please wait a moment before trying again.';
+          const rateLimitInfo = parseRateLimitError(message);
+          const enhancedError = new Error(message, { cause: error }) as RateLimitError;
+          enhancedError.rateLimitInfo = rateLimitInfo;
+          throw enhancedError;
         }
       }
       throw error;
@@ -197,7 +276,11 @@ export const stockApi = {
       if (error && typeof error === 'object' && 'response' in error) {
         const err = error as { response?: { status?: number; data?: { detail?: string } } };
         if (err.response?.status === 429) {
-          throw new Error(err.response.data?.detail || 'Rate limit reached. Please wait a moment before trying again.', { cause: error });
+          const message = err.response.data?.detail || 'Rate limit reached. Please wait a moment before trying again.';
+          const rateLimitInfo = parseRateLimitError(message);
+          const enhancedError = new Error(message, { cause: error }) as RateLimitError;
+          enhancedError.rateLimitInfo = rateLimitInfo;
+          throw enhancedError;
         }
       }
       throw error;
@@ -242,7 +325,11 @@ export const stockApi = {
       if (error && typeof error === 'object' && 'response' in error) {
         const err = error as { response?: { status?: number; data?: { detail?: string } } };
         if (err.response?.status === 429) {
-          throw new Error(err.response.data?.detail || 'Rate limit reached. Please wait a moment before trying again.', { cause: error });
+          const message = err.response.data?.detail || 'Rate limit reached. Please wait a moment before trying again.';
+          const rateLimitInfo = parseRateLimitError(message);
+          const enhancedError = new Error(message, { cause: error }) as RateLimitError;
+          enhancedError.rateLimitInfo = rateLimitInfo;
+          throw enhancedError;
         }
       }
       throw error;
@@ -292,7 +379,11 @@ export const stockApi = {
       if (error && typeof error === 'object' && 'response' in error) {
         const err = error as { response?: { status?: number; data?: { detail?: string } } };
         if (err.response?.status === 429) {
-          throw new Error(err.response.data?.detail || 'Rate limit reached. Please wait a moment before trying again.', { cause: error });
+          const message = err.response.data?.detail || 'Rate limit reached. Please wait a moment before trying again.';
+          const rateLimitInfo = parseRateLimitError(message);
+          const enhancedError = new Error(message, { cause: error }) as RateLimitError;
+          enhancedError.rateLimitInfo = rateLimitInfo;
+          throw enhancedError;
         }
       }
       throw error;

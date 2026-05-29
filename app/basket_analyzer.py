@@ -14,6 +14,7 @@ from openai import OpenAI, OpenAIError
 from .models import BasketAnalysisResponse, BasketTickerResult, NewsCard
 from .stock_data import fetch_price_history, get_ticker_info
 from .news_fetcher import fetch_batch_news_for_period, has_openai_key, RateLimitError
+from .rate_limit_utils import is_rate_limit_error, create_rate_limit_error
 
 logger = logging.getLogger(__name__)
 
@@ -202,9 +203,9 @@ def fetch_basket_news_batch(
         return result
 
     except OpenAIError as e:
-        if hasattr(e, 'status_code') and e.status_code == 429:
+        if is_rate_limit_error(e):
             logger.warning(f"Rate limit hit in batch basket news fetch: {e}")
-            raise RateLimitError(f"Rate limit reached: {e}") from e
+            raise create_rate_limit_error(e) from e
         logger.error(f"OpenAI batch basket news fetch failed: {e}")
         return {}
     except Exception as e:
