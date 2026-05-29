@@ -4,7 +4,8 @@ Basket Analysis: Compare multiple securities to find the biggest movers over a p
 
 import logging
 import os
-from datetime import date
+import json
+from datetime import date, datetime
 from typing import List, Dict, Optional
 
 from openai import OpenAI, OpenAIError
@@ -16,7 +17,212 @@ from .news_fetcher import fetch_batch_news_for_period, has_openai_key, RateLimit
 logger = logging.getLogger(__name__)
 
 OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
+OPENAI_SEARCH_MODEL: str = os.getenv("OPENAI_SEARCH_MODEL", "gpt-5-search-api")
 OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-5.4-nano")
+
+
+# Structured JSON prompt for basket news fetching
+BASKET_NEWS_SYSTEM_PROMPT = """\
+You are a financial research assistant with real-time web search access.
+Your task is to find news articles that explain stock price movements for multiple companies.
+
+You MUST respond ONLY with a valid JSON object — no markdown, no code blocks, no preamble.
+
+Required JSON format:
+{
+  "ticker_news": {
+    "TICKER1": [
+      {
+        "title": "Exact headline of the article",
+        "summary": "One sentence capturing the key investment takeaway",
+        "date": "YYYY-MM-DD",
+        "source_name": "Publication name (e.g. Bloomberg, Reuters, WSJ, CNBC)",
+        "url": "https://full-url-to-article",
+        "category": "company",
+        "relevance": "One sentence explaining why this likely impacted the stock price"
+      }
+    ],
+    "TICKER2": [...]
+  }
+}
+
+Rules:
+- Return 3 to 5 of the most impactful articles per ticker ordered by date descending
+- category must be exactly one of: "company", "competitor", "macro"
+- date must be in YYYY-MM-DD format, or null if unknown
+- url must be a real, complete URL starting with https://, or null if unavailable
+- title, summary, and relevance must be non-empty strings
+- If no news found for a ticker, return an empty array for that ticker
+- Do not include any text outside the JSON object
+"""
+
+
+def _parse_basket_news_cards_from_response(content: str) -> Dict[str, List[Dict]]:
+    """Parse structured news cards from an OpenAI JSON response for basket."""
+    import re
+    
+    if not content:
+        return {}
+
+    text = content.strip()
+    # Strip markdown code fences if the model wrapped the JSON
+    if text.startswith("```"):
+        text = re.sub(r'^```(?:json)?\n?', '', text)
+        text = re.sub(r'\n?```$', '', text)
+        text = text.strip()
+
+    try:
+        data = json.loads(text)
+        ticker_news = data.get("ticker_news", {})
+        if not isinstance(ticker_news, dict):
+            return {}
+
+        validated: Dict[str, List[Dict]] = {}
+        for ticker, articles in ticker_news.items():
+            if not isinstance(articles, list):
+                continue
+            
+            validated_articles = []
+            for article in articles:
+                if not isinstance(article, dict):
+                    continue
+                
+                title = (article.get("title") or "").strip()
+                summary = (article.get("summary") or "").strip()
+                if not title or not summary:
+                    continue
+
+                cat = article.get("category", "company")
+                if cat not in ("company", "competitor", "macro"):
+                    cat = "company"
+
+                url = article.get("url") or None
+                if url and not url.startswith("http"):
+                    url = None
+
+                # Normalize date to YYYY-MM-DD format
+                date_str = article.get("date")
+                if date_str:
+                    try:
+                        parsed_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+                        date_str = parsed_date.isoformat()
+                    except ValueError:
+                        date_str = None
+
+                validated_articles.append({
+                    "title": title,
+                    "summary": summary,
+                    "date": date_str,
+                    "source_name": (article.get("source_name") or "").strip() or None,
+                    "url": url,
+                    "category": cat,
+                    "relevance": (article.get("relevance") or "").strip() or None,
+                })
+            
+            validated[ticker] = validated_articles
+        return validated
+    except (json.JSONDecodeError, KeyError, TypeError):
+        logger.warning("Failed to parse structured basket news cards from OpenAI response")
+        return {}
+
+
+def fetch_basket_news_batch(
+    ticker_info: List[Dict[str, str]],
+    from_date: date,
+    to_date: date,
+    include_competitors: bool = False,
+    include_macro: bool = False,
+) -> Dict[str, List[NewsCard]]:
+    """
+    Fetch news for multiple tickers in a single batch OpenAI call.
+    
+    Args:
+        ticker_info: List of dicts with 'ticker' and 'company_name' keys
+        from_date: Start date for news search
+        to_date: End date for news search
+        include_competitors: Whether to include competitor/industry news
+        include_macro: Whether to include macro/geopolitical news
+    
+    Returns:
+        Dict mapping ticker symbols to lists of NewsCard objects
+    """
+    if not OPENAI_API_KEY:
+        logger.debug("OpenAI API key not configured, returning empty results")
+        return {}
+
+    if not ticker_info:
+        return {}
+
+    try:
+        client = OpenAI(api_key=OPENAI_API_KEY)
+
+        # Build prompt with all tickers
+        ticker_list = [f"{info['ticker']} ({info['company_name']})" for info in ticker_info]
+        ticker_str = ", ".join(ticker_list)
+
+        categories = ["company-specific events (earnings, product launches, executive changes, lawsuits, regulatory actions)"]
+        if include_competitors:
+            categories.append("competitor and industry developments (competitor earnings, M&A, market share changes, sector-wide trends)")
+        if include_macro:
+            categories.append("macroeconomic events (Federal Reserve decisions, interest rate changes, inflation data, GDP reports, geopolitical events)")
+
+        categories_str = "; ".join(categories)
+
+        prompt = (
+            f"Find the most impactful news articles for these companies: {ticker_str} "
+            f"published between {from_date.isoformat()} and {to_date.isoformat()}. "
+            f"Cover: {categories_str}. "
+            f"Focus on news that would explain significant stock price movements. "
+            f"Return 3-5 articles per company if available."
+        )
+
+        response = client.chat.completions.create(
+            model=OPENAI_SEARCH_MODEL,
+            messages=[
+                {"role": "system", "content": BASKET_NEWS_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+        )
+
+        content = response.choices[0].message.content or ""
+        raw_news_dict = _parse_basket_news_cards_from_response(content)
+        
+        # Convert to NewsCard objects
+        from .models import NewsCategory
+        result: Dict[str, List[NewsCard]] = {}
+        
+        for ticker, raw_cards in raw_news_dict.items():
+            news_cards = []
+            for card in raw_cards:
+                cat_str = card.get("category", "company")
+                try:
+                    cat = NewsCategory(cat_str)
+                except ValueError:
+                    cat = NewsCategory.COMPANY
+                
+                news_cards.append(NewsCard(
+                    title=card.get("title", ""),
+                    summary=card.get("summary", ""),
+                    date=card.get("date") or None,
+                    source_name=card.get("source_name") or None,
+                    url=card.get("url") or None,
+                    category=cat,
+                    relevance=card.get("relevance") or None,
+                ))
+            result[ticker] = news_cards
+        
+        logger.debug(f"Batch news fetch returned news for {len(result)} tickers")
+        return result
+
+    except OpenAIError as e:
+        if hasattr(e, 'status_code') and e.status_code == 429:
+            logger.warning(f"Rate limit hit in batch basket news fetch: {e}")
+            raise RateLimitError(f"Rate limit reached: {e}") from e
+        logger.error(f"OpenAI batch basket news fetch failed: {e}")
+        return {}
+    except Exception as e:
+        logger.error(f"Unexpected error in batch basket news fetch: {e}")
+        return {}
 
 
 def generate_basket_holistic_summary(
@@ -141,7 +347,7 @@ def analyze_basket(
     trading day to the last trading day in the period, then sorts by
     absolute percentage change to identify the biggest movers.
     
-    If include_news is True, also fetches news articles for each ticker.
+    If include_news is True, fetches news articles for all tickers in a single batch call.
     """
     results: List[BasketTickerResult] = []
     failed_tickers: List[str] = []
@@ -154,6 +360,9 @@ def analyze_basket(
         else:
             logger.warning("OpenAI API key not configured, skipping news fetch")
             include_news = False
+    
+    # First pass: fetch price data and company info for all tickers
+    ticker_info_list: List[Dict[str, str]] = []
     
     for ticker in tickers:
         ticker = ticker.upper().strip()
@@ -181,44 +390,11 @@ def analyze_basket(
             info = get_ticker_info(ticker)
             company_name = info.get("company_name") or ticker
             
-            # Fetch news if enabled
-            news_cards: List[NewsCard] = []
-            if include_news:
-                try:
-                    raw_cards = fetch_batch_news_for_period(
-                        company_name=company_name,
-                        ticker=ticker,
-                        from_date=start_date,
-                        to_date=end_date,
-                        include_competitors=include_competitors,
-                        include_macro=include_macro,
-                    )
-                    # Convert raw dicts to NewsCard models
-                    for card in raw_cards:
-                        cat_str = card.get("category", "company")
-                        try:
-                            from .models import NewsCategory
-                            cat = NewsCategory(cat_str)
-                        except ValueError:
-                            from .models import NewsCategory
-                            cat = NewsCategory.COMPANY
-                        
-                        news_cards.append(NewsCard(
-                            title=card.get("title", ""),
-                            summary=card.get("summary", ""),
-                            date=card.get("date") or None,
-                            source_name=card.get("source_name") or None,
-                            url=card.get("url") or None,
-                            category=cat,
-                            relevance=card.get("relevance") or None,
-                        ))
-                    logger.debug(f"Fetched {len(news_cards)} news cards for {ticker}")
-                except RateLimitError as e:
-                    logger.warning(f"Rate limit hit fetching news for {ticker}: {e}")
-                    # Continue without news for this ticker
-                except Exception as e:
-                    logger.warning(f"Failed to fetch news for {ticker}: {e}")
-                    # Continue without news for this ticker
+            # Store for batch news fetch
+            ticker_info_list.append({
+                'ticker': ticker,
+                'company_name': company_name
+            })
             
             results.append(
                 BasketTickerResult(
@@ -228,13 +404,37 @@ def analyze_basket(
                     end_price=round(end_price, 2),
                     total_change_pct=round(total_change_pct, 2),
                     direction=direction,
-                    news_cards=news_cards,
+                    news_cards=[],  # Will be filled in batch
                 )
             )
         except Exception as e:
             logger.warning(f"Failed to analyze {ticker}: {e}")
             failed_tickers.append(ticker)
             continue
+    
+    # Batch fetch news for all tickers in a single API call
+    if include_news and ticker_info_list:
+        try:
+            batch_news = fetch_basket_news_batch(
+                ticker_info=ticker_info_list,
+                from_date=start_date,
+                to_date=end_date,
+                include_competitors=include_competitors,
+                include_macro=include_macro,
+            )
+            
+            # Attach news cards to corresponding results
+            for result in results:
+                if result.ticker in batch_news:
+                    result.news_cards = batch_news[result.ticker]
+                    logger.debug(f"Attached {len(result.news_cards)} news cards to {result.ticker}")
+        except RateLimitError as e:
+            logger.warning(f"Rate limit hit in batch news fetch: {e}")
+            news_source = "OpenAI Web Search (Rate Limited)"
+            # Continue without news
+        except Exception as e:
+            logger.warning(f"Failed to fetch batch news: {e}")
+            # Continue without news
     
     # Sort by absolute percentage change (biggest movers first)
     results.sort(key=lambda x: abs(x.total_change_pct), reverse=True)
