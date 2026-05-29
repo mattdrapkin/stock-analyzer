@@ -285,7 +285,7 @@ Please provide a 2-3 sentence holistic summary explaining:
 2. Common themes across stocks (sector trends, macro events, company-specific news)
 3. Why the biggest movers moved significantly
 
-Be concise and focus on the most impactful factors.
+Be concise and focus on the most impactful factors. IMPORTANT: This is a web application interface, not a conversational chat. Never offer follow-up actions, suggest what the user can do next, or ask if they want additional information. Provide a complete, self-contained response.
 """
     
     try:
@@ -295,7 +295,7 @@ Be concise and focus on the most impactful factors.
             messages=[
                 {
                     "role": "system",
-                    "content": "You are an expert financial analyst. Provide concise, insightful summaries of basket performance based on news and price data."
+                    "content": "You are an expert financial analyst. Provide concise, insightful summaries of basket performance based on news and price data. IMPORTANT: This is a web application interface, not a conversational chat. Never offer follow-up actions, suggest what the user can do next, or ask if they want additional information. Provide a complete, self-contained response."
                 },
                 {
                     "role": "user",

@@ -302,7 +302,7 @@ def _search_with_openai(
             messages=[
                 {
                     "role": "system",
-                    "content": "You are a financial research assistant. Search for and summarize relevant news articles. Always include direct source URLs in your response."
+                    "content": "You are a financial research assistant. Search for and summarize relevant news articles. Always include direct source URLs in your response. IMPORTANT: This is a web application interface, not a conversational chat. Never offer follow-up actions, suggest what the user can do next, or ask if they want additional information. Provide a complete, self-contained response."
                 },
                 {
                     "role": "user",

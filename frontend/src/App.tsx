@@ -100,6 +100,9 @@ const App: React.FC = () => {
   const [holisticSummary, setHolisticSummary] = useState<string | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
 
+  // Threshold state
+  const [minMovementThreshold, setMinMovementThreshold] = useState(2.0);
+
   // Header navigation state
   const [activeSection, setActiveSection] = useState<string>('');
 
@@ -159,7 +162,10 @@ const App: React.FC = () => {
       if (endDate) {
         params.end_date = format(endDate, 'yyyy-MM-dd');
       }
-      const data = await stockApi.getAnalysis(ticker.toUpperCase(), params);
+      const data = await stockApi.getAnalysis(ticker.toUpperCase(), {
+        ...params,
+        min_movement_pct: minMovementThreshold
+      });
       setAnalysis(data);
       setHolisticSummary(null); // Clear previous summary
       setSummaryLoading(true); // Start loading summary
@@ -167,7 +173,7 @@ const App: React.FC = () => {
       // Auto-fetch holistic summary
       try {
         const summaryResponse = await stockApi.chat(ticker, {
-          message: 'Provide a 1-2 sentence summary of what drove this stock\'s movements over the entire time period. Keep it simple and readable.',
+          message: 'Provide a 1-2 sentence summary of what drove this stock\'s movements over the entire time period. Keep it simple and readable. Do not offer follow-up actions or suggest what the user can do next.',
           history: []
         });
         setHolisticSummary(summaryResponse.response);
@@ -302,63 +308,104 @@ const App: React.FC = () => {
 
           {/* Search Form */}
           {viewMode === 'single' ? (
-            <form onSubmit={handleSearch} className="flex flex-col md:flex-row gap-2 md:gap-3">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
-                <input
-                  type="text"
-                  value={ticker}
-                  onChange={(e) => setTicker(e.target.value)}
-                  placeholder="Enter Ticker (e.g. TSLA)"
-                  className="pl-10 pr-4 py-2 bg-slate-100 border-transparent focus:bg-white focus:ring-2 focus:ring-indigo-500 rounded-lg outline-none w-full md:w-40 transition-all"
-                />
-              </div>
-              <div className="flex gap-2">
+            <form onSubmit={handleSearch} className="flex flex-col gap-3">
+              <div className="flex flex-col md:flex-row gap-2 md:gap-3">
                 <div className="relative">
-                  <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4 pointer-events-none" />
-                  <ReactDatePicker
-                    selected={startDate}
-                    onChange={(date) => setStartDate(date)}
-                    selectsStart
-                    startDate={startDate}
-                    endDate={endDate}
-                    placeholderText="Start (90D)"
-                    className="pl-10 pr-4 py-2 bg-slate-100 border-transparent focus:bg-white focus:ring-2 focus:ring-indigo-500 rounded-lg outline-none w-full md:w-36 transition-all text-sm"
-                    dateFormat="MMM d, yyyy"
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4" />
+                  <input
+                    type="text"
+                    value={ticker}
+                    onChange={(e) => setTicker(e.target.value)}
+                    placeholder="Enter Ticker (e.g. TSLA)"
+                    className="pl-10 pr-4 py-2 bg-slate-100 border-transparent focus:bg-white focus:ring-2 focus:ring-indigo-500 rounded-lg outline-none w-full md:w-40 transition-all"
                   />
                 </div>
-                <div className="relative">
-                  <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4 pointer-events-none" />
-                  <ReactDatePicker
-                    selected={endDate}
-                    onChange={(date) => setEndDate(date)}
-                    selectsEnd
-                    startDate={startDate}
-                    endDate={endDate}
-                    minDate={startDate}
-                    placeholderText="End (Today)"
-                    className="pl-10 pr-4 py-2 bg-slate-100 border-transparent focus:bg-white focus:ring-2 focus:ring-indigo-500 rounded-lg outline-none w-full md:w-36 transition-all text-sm"
-                    dateFormat="MMM d, yyyy"
-                  />
+                <div className="flex gap-2">
+                  <div className="relative">
+                    <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4 pointer-events-none" />
+                    <ReactDatePicker
+                      selected={startDate}
+                      onChange={(date) => setStartDate(date)}
+                      selectsStart
+                      startDate={startDate}
+                      endDate={endDate}
+                      placeholderText="Start (90D)"
+                      className="pl-10 pr-4 py-2 bg-slate-100 border-transparent focus:bg-white focus:ring-2 focus:ring-indigo-500 rounded-lg outline-none w-full md:w-36 transition-all text-sm"
+                      dateFormat="MMM d, yyyy"
+                    />
+                  </div>
+                  <div className="relative">
+                    <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4 pointer-events-none" />
+                    <ReactDatePicker
+                      selected={endDate}
+                      onChange={(date) => setEndDate(date)}
+                      selectsEnd
+                      startDate={startDate}
+                      endDate={endDate}
+                      minDate={startDate}
+                      placeholderText="End (Today)"
+                      className="pl-10 pr-4 py-2 bg-slate-100 border-transparent focus:bg-white focus:ring-2 focus:ring-indigo-500 rounded-lg outline-none w-full md:w-36 transition-all text-sm"
+                      dateFormat="MMM d, yyyy"
+                    />
+                  </div>
+                  {(startDate || endDate) && (
+                    <button
+                      type="button"
+                      onClick={clearDates}
+                      className="px-3 py-2 text-slate-500 hover:text-slate-700 hover:bg-slate-200 rounded-lg transition-colors"
+                      title="Clear dates"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
                 </div>
-                {(startDate || endDate) && (
-                  <button
-                    type="button"
-                    onClick={clearDates}
-                    className="px-3 py-2 text-slate-500 hover:text-slate-700 hover:bg-slate-200 rounded-lg transition-colors"
-                    title="Clear dates"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                )}
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2"
+                >
+                  {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Analyze'}
+                </button>
               </div>
-              <button
-                type="submit"
-                disabled={loading}
-                className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2"
-              >
-                {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Analyze'}
-              </button>
+              {/* Threshold Control */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-sm text-slate-600 font-medium">Movement Threshold:</span>
+                <div className="relative group">
+                  <Info className="w-4 h-4 text-slate-400 cursor-help" />
+                  <div className="absolute left-0 top-6 w-64 p-3 bg-slate-800 text-white text-xs rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-20">
+                    Minimum percentage change to flag as a major movement. Lower values show more movements, higher values show only the biggest swings.
+                  </div>
+                </div>
+                <div className="flex items-center gap-1">
+                  <input
+                    type="number"
+                    value={minMovementThreshold}
+                    onChange={(e) => setMinMovementThreshold(parseFloat(e.target.value) || 2.0)}
+                    step="0.1"
+                    min="0.1"
+                    max="50"
+                    title="Minimum percentage change to flag as a major movement"
+                    className="w-20 px-3 py-1.5 bg-slate-100 border-transparent focus:bg-white focus:ring-2 focus:ring-indigo-500 rounded-lg outline-none text-sm font-medium transition-all"
+                  />
+                  <span className="text-sm text-slate-500">%</span>
+                </div>
+                <div className="flex gap-1">
+                  {[1, 2, 3, 5].map((value) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => setMinMovementThreshold(value)}
+                      className={`px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                        minMovementThreshold === value
+                          ? 'bg-indigo-600 text-white'
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      {value}%
+                    </button>
+                  ))}
+                </div>
+              </div>
             </form>
           ) : (
             <form onSubmit={handleBasketAnalysis} className="flex flex-col md:flex-row gap-2 md:gap-3">
