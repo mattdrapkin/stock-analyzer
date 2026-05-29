@@ -110,6 +110,7 @@ class BasketTickerResult(BaseModel):
     end_price: float
     total_change_pct: float
     direction: str  # "up" or "down"
+    news_cards: List[NewsCard] = []  # News articles for this specific stock
 
 
 class BasketAnalysisRequest(BaseModel):
@@ -124,3 +125,5 @@ class BasketAnalysisResponse(BaseModel):
     period_end: date
     results: List[BasketTickerResult]
     total_analyzed: int
+    holistic_summary: Optional[str] = None  # AI-generated summary of basket movement drivers
+    news_source: str = "None"  # Which news source was used (OpenAI, Mock, None)
