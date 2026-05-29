@@ -121,6 +121,7 @@ const App: React.FC = () => {
   const [basketFilterNewsOnly, setBasketFilterNewsOnly] = useState(false);
   const [basketSortOption, setBasketSortOption] = useState<'biggest_winners' | 'biggest_losers' | 'alphabetical'>('biggest_winners');
   const [basketSectorFilter, setBasketSectorFilter] = useState<string>('all');
+  const [basketIndustryFilter, setBasketIndustryFilter] = useState<string>('all');
 
   // Collapsible sections state
   const [holisticSummaryExpanded, setHolisticSummaryExpanded] = useState(true);
@@ -862,21 +863,31 @@ const App: React.FC = () => {
                       <span className="text-sm text-slate-700">Show only with news</span>
                     </label>
                     <div className="flex items-center gap-2">
-                      <span className="text-sm text-slate-500">Filter by:</span>
+                      <span className="text-sm text-slate-500">Sector:</span>
                       <select
                         value={basketSectorFilter}
                         onChange={(e) => setBasketSectorFilter(e.target.value)}
                         className="text-sm border border-slate-300 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                        aria-label="Filter by sector or industry"
+                        aria-label="Filter by sector"
                       >
-                        <option value="all">All Sectors/Industries</option>
-                        {(() => {
-                          const uniqueSectors = [...new Set(basketAnalysis.results.map(r => r.sector).filter(Boolean))];
-                          const uniqueIndustries = [...new Set(basketAnalysis.results.map(r => r.industry).filter(Boolean))];
-                          return [...uniqueSectors, ...uniqueIndustries].sort().map(item => (
-                            <option key={item} value={item}>{item}</option>
-                          ));
-                        })()}
+                        <option value="all">All Sectors</option>
+                        {[...new Set(basketAnalysis.results.map(r => r.sector).filter(Boolean))].sort().map(sector => (
+                          <option key={sector} value={sector}>{sector}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-slate-500">Industry:</span>
+                      <select
+                        value={basketIndustryFilter}
+                        onChange={(e) => setBasketIndustryFilter(e.target.value)}
+                        className="text-sm border border-slate-300 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        aria-label="Filter by industry"
+                      >
+                        <option value="all">All Industries</option>
+                        {[...new Set(basketAnalysis.results.map(r => r.industry).filter(Boolean))].sort().map(industry => (
+                          <option key={industry} value={industry}>{industry}</option>
+                        ))}
                       </select>
                     </div>
                     <div className="flex items-center gap-2">
@@ -903,11 +914,14 @@ const App: React.FC = () => {
                         filteredResults = filteredResults.filter(r => r.news_cards && r.news_cards.length > 0);
                       }
 
-                      // Filter by sector/industry
+                      // Filter by sector
                       if (basketSectorFilter !== 'all') {
-                        filteredResults = filteredResults.filter(r => 
-                          r.sector === basketSectorFilter || r.industry === basketSectorFilter
-                        );
+                        filteredResults = filteredResults.filter(r => r.sector === basketSectorFilter);
+                      }
+
+                      // Filter by industry
+                      if (basketIndustryFilter !== 'all') {
+                        filteredResults = filteredResults.filter(r => r.industry === basketIndustryFilter);
                       }
 
                       // Sort results

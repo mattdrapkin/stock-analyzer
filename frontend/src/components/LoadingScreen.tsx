@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import ReactMarkdown from 'react-markdown';
 import { stockApi } from '../api';
 import { DEFAULT_FACTS } from '../constants/funFacts';
 
@@ -15,7 +16,15 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({
 }) => {
   const [currentFactIndex, setCurrentFactIndex] = useState(0);
   const [isTransitioning, setIsTransitioning] = useState(false);
-  const [facts, setFacts] = useState<string[]>(DEFAULT_FACTS);
+  const [facts, setFacts] = useState<string[]>(() => {
+    // Shuffle default facts on initialization
+    const shuffled = [...DEFAULT_FACTS];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    return shuffled;
+  });
 
   useEffect(() => {
     // Fetch fun facts if ticker or basket is provided
@@ -118,9 +127,9 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({
             <div className="w-2 h-2 bg-indigo-500 rounded-full animate-[bounce_1s_infinite_0.4s]"></div>
           </div>
           <p className="text-slate-400 text-xs font-medium uppercase tracking-wider mb-1">Did you know?</p>
-          <p className={`text-slate-600 text-xs max-w-xs mx-auto transition-opacity duration-500 ${isTransitioning ? 'opacity-0' : 'opacity-100'}`}>
-            {currentFact}
-          </p>
+          <div className={`text-slate-600 text-xs max-w-xs mx-auto transition-opacity duration-500 ${isTransitioning ? 'opacity-0' : 'opacity-100'}`}>
+            <ReactMarkdown>{currentFact}</ReactMarkdown>
+          </div>
         </div>
       </div>
     </div>
