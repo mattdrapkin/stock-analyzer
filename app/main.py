@@ -321,6 +321,18 @@ def chat(
 )
 def analyze_basket_endpoint(
     body: BasketAnalysisRequest,
+    include_news: bool = Query(
+        default=False,
+        description="Include news articles for each stock in the basket.",
+    ),
+    include_competitors: bool = Query(
+        default=False,
+        description="Also fetch competitor / industry news for each stock.",
+    ),
+    include_macro: bool = Query(
+        default=False,
+        description="Also fetch macro / geopolitical news for each stock.",
+    ),
 ) -> BasketAnalysisResponse:
     """
     Analyze multiple securities over a date range to identify the biggest movers.
@@ -338,6 +350,12 @@ def analyze_basket_endpoint(
       "end_date": "2024-12-31"
     }
     ```
+
+    **News features** (controlled via query parameters):
+    - `include_news=false` (default) → price analysis only
+    - `include_news=true` → also fetches news articles for each stock
+    - `include_competitors=true` → includes sector / industry news
+    - `include_macro=true` → includes Fed, rates, geopolitics news
     """
     # Normalize tickers
     normalized_tickers = [t.upper().strip() for t in body.tickers if t.strip()]
@@ -359,7 +377,13 @@ def analyze_basket_endpoint(
             tickers=normalized_tickers,
             start_date=body.start_date,
             end_date=body.end_date,
+            include_news=include_news,
+            include_competitors=include_competitors,
+            include_macro=include_macro,
         )
+    except RateLimitError as e:
+        logger.warning(f"Rate limit error in basket analysis: {e}")
+        raise HTTPException(status_code=429, detail=str(e))
     except Exception as e:
         logger.exception(f"Unexpected error in basket analysis")
         raise HTTPException(status_code=500, detail=f"Internal error: {e}")
