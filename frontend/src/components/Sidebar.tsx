@@ -1,10 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  Info, 
-  Newspaper, 
-  MessageSquare, 
-  TrendingUp,
-  Layers,
   Menu,
   X
 } from 'lucide-react';

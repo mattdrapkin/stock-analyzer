@@ -22,6 +22,9 @@ OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
 OPENAI_SEARCH_MODEL: str = os.getenv("OPENAI_SEARCH_MODEL", "gpt-5-search-api")
 OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-5.4-nano")
 
+# Configurable limit for news fetching on biggest movers
+BASKET_NEWS_TOP_N: int = int(os.getenv("BASKET_NEWS_TOP_N", "10"))
+
 
 # Structured JSON prompt for basket news fetching
 BASKET_NEWS_SYSTEM_PROMPT = """\
@@ -121,6 +124,7 @@ def fetch_basket_news_batch(
     to_date: date,
     include_competitors: bool = False,
     include_macro: bool = False,
+    prioritize: bool = False,
 ) -> Dict[str, List[NewsCard]]:
     """
     Fetch news for multiple tickers in a single batch OpenAI call.
@@ -131,6 +135,7 @@ def fetch_basket_news_batch(
         to_date: End date for news search
         include_competitors: Whether to include competitor/industry news
         include_macro: Whether to include macro/geopolitical news
+        prioritize: Whether these are priority tickers (biggest winners/losers)
     
     Returns:
         Dict mapping ticker symbols to lists of NewsCard objects
@@ -156,9 +161,15 @@ def fetch_basket_news_batch(
             categories.append("macro")
         categories_str = ", ".join(categories)
 
+        # Add priority context if these are the biggest movers
+        priority_context = ""
+        if prioritize:
+            priority_context = "These are the biggest winners and losers in the basket. PRIORITIZE finding news for these tickers as they are the most significant movers. "
+
         prompt = (
             f"News for {ticker_str} "
             f"{from_date.isoformat()} to {to_date.isoformat()}. "
+            f"{priority_context}"
             f"Topics: {categories_str}. "
             f"2-3 articles per ticker. 50%+ coverage."
         )
@@ -350,6 +361,8 @@ def analyze_basket(
     include_news: bool = False,
     include_competitors: bool = False,
     include_macro: bool = False,
+    basket_id: Optional[str] = None,
+    basket_name: Optional[str] = None,
 ) -> BasketAnalysisResponse:
     """
     Analyze a basket of tickers over a date range to find the biggest movers.
@@ -427,16 +440,28 @@ def analyze_basket(
             failed_tickers.append(ticker)
             continue
     
-    # Batch fetch news for all tickers in a single API call
+    # Sort by absolute percentage change (biggest movers first) BEFORE news fetching
+    results.sort(key=lambda x: abs(x.total_change_pct), reverse=True)
+    
+    # Batch fetch news for top N biggest movers in a single API call
     if include_news and ticker_info_list:
-        logger.info(f"Fetching batch news for {len(ticker_info_list)} tickers")
+        # Prioritize top N biggest movers for news fetching (configurable via BASKET_NEWS_TOP_N)
+        top_n = min(BASKET_NEWS_TOP_N, len(results))
+        top_movers = results[:top_n]
+        top_ticker_info = [
+            {'ticker': r.ticker, 'company_name': r.company_name}
+            for r in top_movers
+        ]
+        
+        logger.info(f"Fetching batch news for top {top_n} biggest movers out of {len(results)} total")
         try:
             batch_news = fetch_basket_news_batch(
-                ticker_info=ticker_info_list,
+                ticker_info=top_ticker_info,
                 from_date=start_date,
                 to_date=end_date,
                 include_competitors=include_competitors,
                 include_macro=include_macro,
+                prioritize=True,  # Flag to indicate these are priority tickers
             )
             
             logger.info(f"Batch news fetch returned data for {len(batch_news)} tickers")
@@ -447,7 +472,7 @@ def analyze_basket(
                     result.news_cards = batch_news[result.ticker]
                     logger.info(f"Attached {len(result.news_cards)} news cards to {result.ticker}")
                 else:
-                    logger.warning(f"No news found for {result.ticker}")
+                    logger.info(f"No news found for {result.ticker}")
         except RateLimitError as e:
             logger.warning(f"Rate limit hit in batch news fetch: {e}")
             news_source = "OpenAI Web Search (Rate Limited)"
@@ -457,9 +482,6 @@ def analyze_basket(
             # Continue without news
     else:
         logger.info(f"Skipping news fetch - include_news={include_news}, ticker_info_list length={len(ticker_info_list)}")
-    
-    # Sort by absolute percentage change (biggest movers first)
-    results.sort(key=lambda x: abs(x.total_change_pct), reverse=True)
     
     # Log failed tickers
     if failed_tickers:
@@ -473,6 +495,7 @@ def analyze_basket(
         results=results,
         total_analyzed=len(results),
         news_source=news_source,
+        basket_name=basket_name,
     )
     
     # Generate holistic summary if news was fetched

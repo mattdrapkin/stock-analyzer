@@ -163,6 +163,7 @@ export interface BasketAnalysisResponse {
   total_analyzed: number;
   holistic_summary?: string;
   news_source: string;
+  basket_name?: string;
 }
 
 export interface FunFactsRequest {
@@ -172,6 +173,22 @@ export interface FunFactsRequest {
 
 export interface FunFactsResponse {
   facts: string[];
+}
+
+export interface PriceDataPoint {
+  date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+export interface PriceHistoryResponse {
+  ticker: string;
+  period_start: string;
+  period_end: string;
+  data: PriceDataPoint[];
 }
 
 export const stockApi = {
@@ -242,6 +259,8 @@ export const stockApi = {
     include_news?: boolean;
     include_competitors?: boolean;
     include_macro?: boolean;
+    basket_id?: string;
+    basket_name?: string;
   }) => {
     try {
       const { include_news, include_competitors, include_macro, ...bodyData } = data;
@@ -343,6 +362,8 @@ export const stockApi = {
     include_news?: boolean;
     include_competitors?: boolean;
     include_macro?: boolean;
+    basket_id?: string;
+    basket_name?: string;
   }) => {
     try {
       const { include_news, include_competitors, include_macro, ...bodyData } = data;
@@ -375,6 +396,30 @@ export const stockApi = {
       link.click();
       document.body.removeChild(link);
       window.URL.revokeObjectURL(url);
+    } catch (error: unknown) {
+      if (error && typeof error === 'object' && 'response' in error) {
+        const err = error as { response?: { status?: number; data?: { detail?: string } } };
+        if (err.response?.status === 429) {
+          const message = err.response.data?.detail || 'Rate limit reached. Please wait a moment before trying again.';
+          const rateLimitInfo = parseRateLimitError(message);
+          const enhancedError = new Error(message, { cause: error }) as RateLimitError;
+          enhancedError.rateLimitInfo = rateLimitInfo;
+          throw enhancedError;
+        }
+      }
+      throw error;
+    }
+  },
+
+  getPriceHistory: async (ticker: string, params?: {
+    start_date?: string;
+    end_date?: string;
+  }) => {
+    try {
+      const response = await api.get<PriceHistoryResponse>(`/analysis/${ticker}/price-history`, { 
+        params 
+      });
+      return response.data;
     } catch (error: unknown) {
       if (error && typeof error === 'object' && 'response' in error) {
         const err = error as { response?: { status?: number; data?: { detail?: string } } };

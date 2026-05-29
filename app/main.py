@@ -31,6 +31,7 @@ from .models import (
     FunFactsResponse,
     HealthResponse,
     TickerAnalysis,
+    PriceHistoryResponse,
 )
 from .analyzer import build_analysis
 from .basket_analyzer import analyze_basket
@@ -39,6 +40,7 @@ from .fun_facts import generate_fun_facts
 from .news_fetcher import has_openai_key as news_has_openai_key
 from .rate_limit_utils import RateLimitError
 from .pdf_generator import generate_analysis_pdf, generate_basket_pdf
+from .stock_data import fetch_price_history
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -300,6 +302,65 @@ def get_analysis(
         raise HTTPException(status_code=500, detail=f"Internal error: {e}")
 
 
+@app.get(
+    "/api/v1/analysis/{ticker}/price-history",
+    response_model=PriceHistoryResponse,
+    tags=["Analysis"],
+    summary="Fetch full price history for a ticker",
+)
+def get_price_history(
+    ticker: str,
+    start_date: Optional[date] = Query(
+        default=None,
+        description="Start date (YYYY-MM-DD). Defaults to 90 days ago.",
+    ),
+    end_date: Optional[date] = Query(
+        default=None,
+        description="End date (YYYY-MM-DD). Defaults to today.",
+    ),
+) -> PriceHistoryResponse:
+    """
+    Returns full OHLCV price history for a ticker over the requested period.
+    Used for charting and analytics visualizations.
+    """
+    resolved_end = end_date or date.today()
+    resolved_start = start_date or (resolved_end - timedelta(days=90))
+
+    if resolved_start > resolved_end:
+        raise HTTPException(status_code=422, detail="start_date must be before end_date.")
+    if (resolved_end - resolved_start).days > 730:
+        raise HTTPException(status_code=422, detail="Date range cannot exceed 2 years.")
+
+    try:
+        from .models import PriceDataPoint
+        
+        df = fetch_price_history(ticker.upper(), resolved_start, resolved_end)
+        
+        # Convert DataFrame to list of PriceDataPoint
+        data_points = []
+        for idx, row in df.iterrows():
+            data_points.append(PriceDataPoint(
+                date=idx.date().isoformat(),
+                open=round(float(row["Open"]), 4),
+                high=round(float(row["High"]), 4),
+                low=round(float(row["Low"]), 4),
+                close=round(float(row["Close"]), 4),
+                volume=int(row["Volume"]),
+            ))
+        
+        return PriceHistoryResponse(
+            ticker=ticker.upper(),
+            period_start=resolved_start,
+            period_end=resolved_end,
+            data=data_points,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception(f"Unexpected error fetching price history for {ticker}")
+        raise HTTPException(status_code=500, detail=f"Internal error: {e}")
+
+
 @app.post(
     "/api/v1/chat/{ticker}",
     response_model=ChatResponse,
@@ -413,6 +474,8 @@ def analyze_basket_endpoint(
             include_news=include_news,
             include_competitors=include_competitors,
             include_macro=include_macro,
+            basket_id=body.basket_id,
+            basket_name=body.basket_name,
         )
     except RateLimitError as e:
         logger.warning(f"Rate limit error in basket analysis: {e}")
@@ -609,6 +672,8 @@ def download_basket_pdf(
             include_news=include_news,
             include_competitors=include_competitors,
             include_macro=include_macro,
+            basket_id=body.basket_id,
+            basket_name=body.basket_name,
         )
         
         params = {

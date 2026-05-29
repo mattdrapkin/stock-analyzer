@@ -315,18 +315,23 @@ def generate_basket_pdf(basket_response: BasketAnalysisResponse, params: dict) -
     story.append(Spacer(1, 0.2 * inch))
     
     # Title
-    ticker_str = ", ".join(basket_response.tickers[:5])
-    if len(basket_response.tickers) > 5:
-        ticker_str += f" + {len(basket_response.tickers) - 5} more"
-    story.append(Paragraph(f"Basket Analysis Report", title_style))
-    story.append(Paragraph(f"Tickers: {ticker_str}", ParagraphStyle(
-        'Subtitle',
-        parent=styles['Heading3'],
-        fontSize=14,
-        textColor=colors.HexColor('#64748b'),
-        alignment=TA_CENTER,
-        spaceAfter=20,
-    )))
+    if basket_response.basket_name:
+        # Use basket name for default baskets
+        story.append(Paragraph(f"Basket Analysis Report: {basket_response.basket_name}", title_style))
+    else:
+        # Use ticker list for custom baskets
+        ticker_str = ", ".join(basket_response.tickers[:5])
+        if len(basket_response.tickers) > 5:
+            ticker_str += f" + {len(basket_response.tickers) - 5} more"
+        story.append(Paragraph(f"Basket Analysis Report", title_style))
+        story.append(Paragraph(f"Tickers: {ticker_str}", ParagraphStyle(
+            'Subtitle',
+            parent=styles['Heading3'],
+            fontSize=14,
+            textColor=colors.HexColor('#64748b'),
+            alignment=TA_CENTER,
+            spaceAfter=20,
+        )))
     story.append(Spacer(1, 0.2 * inch))
     
     # Analysis Parameters

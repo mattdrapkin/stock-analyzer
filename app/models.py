@@ -119,6 +119,8 @@ class BasketAnalysisRequest(BaseModel):
     tickers: List[str] = Field(..., min_items=1, max_items=50, description="List of ticker symbols")
     start_date: date
     end_date: date
+    basket_id: Optional[str] = Field(None, description="ID of the default basket if selected")
+    basket_name: Optional[str] = Field(None, description="Name of the default basket if selected")
 
 
 class BasketAnalysisResponse(BaseModel):
@@ -129,6 +131,7 @@ class BasketAnalysisResponse(BaseModel):
     total_analyzed: int
     holistic_summary: Optional[str] = None  # AI-generated summary of basket movement drivers
     news_source: str = "None"  # Which news source was used (OpenAI, Mock, None)
+    basket_name: Optional[str] = None  # Name of the default basket if applicable
 
 
 class FunFactsRequest(BaseModel):
@@ -144,3 +147,19 @@ class FunFactsRequest(BaseModel):
 
 class FunFactsResponse(BaseModel):
     facts: List[str]
+
+
+class PriceDataPoint(BaseModel):
+    date: str  # YYYY-MM-DD
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: int
+
+
+class PriceHistoryResponse(BaseModel):
+    ticker: str
+    period_start: date
+    period_end: date
+    data: List[PriceDataPoint]

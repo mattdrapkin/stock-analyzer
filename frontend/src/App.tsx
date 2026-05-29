@@ -14,13 +14,16 @@ import {
   X,
   Layers,
   Newspaper,
-  Download
+  Download,
+  BarChart3
 } from 'lucide-react';
 import { stockApi } from './api';
 import type { TickerAnalysis, StockMovement, NewsCard, BasketAnalysisResponse, BasketTickerResult } from './api';
 import { format } from 'date-fns';
 import HeaderNavigation, { type Section } from './components/HeaderNavigation';
 import LoadingScreen from './components/LoadingScreen';
+import StockChart from './components/StockChart';
+import BasketAnalytics from './components/BasketAnalytics';
 import { DEFAULT_BASKETS } from './constants/defaultBaskets';
 
 // Helper function to format basket summary with bold tickers and color-coded percentages
@@ -130,8 +133,13 @@ const App: React.FC = () => {
   const [holisticSummaryExpanded, setHolisticSummaryExpanded] = useState(true);
   const [newsHighlightsExpanded, setNewsHighlightsExpanded] = useState(true);
   const [tickerInfoExpanded, setTickerInfoExpanded] = useState(true);
+  const [analyticsExpanded, setAnalyticsExpanded] = useState(true);
   const [holisticSummary, setHolisticSummary] = useState<string | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
+
+  // Price history data for charts
+  const [priceHistory, setPriceHistory] = useState<any>(null);
+  const [priceHistoryLoading, setPriceHistoryLoading] = useState(false);
 
   // Threshold state
   const [minMovementThreshold, setMinMovementThreshold] = useState(2.0);
@@ -180,6 +188,12 @@ const App: React.FC = () => {
       visible: viewMode === 'single' && (!!holisticSummary || summaryLoading)
     },
     {
+      id: 'analytics',
+      label: 'Analytics & Graphs',
+      icon: BarChart3,
+      visible: viewMode === 'single' && !!analysis
+    },
+    {
       id: 'movements',
       label: 'Significant Movements',
       icon: TrendingUp,
@@ -189,13 +203,19 @@ const App: React.FC = () => {
       id: 'news-highlights',
       label: 'News Highlights',
       icon: Newspaper,
-      visible: viewMode === 'single' && analysis?.batch_news_cards && analysis.batch_news_cards.length > 0
+      visible: viewMode === 'single' && (analysis?.batch_news_cards?.length ?? 0) > 0
     },
     {
       id: 'basket-holistic-summary',
       label: 'Basket Summary',
       icon: Info,
       visible: viewMode === 'basket' && !!basketAnalysis?.holistic_summary
+    },
+    {
+      id: 'basket-analytics',
+      label: 'Analytics & Graphs',
+      icon: BarChart3,
+      visible: viewMode === 'basket' && !!basketAnalysis
     },
     {
       id: 'basket-performance',
@@ -229,6 +249,7 @@ const App: React.FC = () => {
       setAnalysis(data);
       setHolisticSummary(null); // Clear previous summary
       setSummaryLoading(true); // Start loading summary
+      setPriceHistoryLoading(true); // Start loading price history
       
       // Auto-fetch holistic summary
       try {
@@ -243,6 +264,17 @@ const App: React.FC = () => {
         setHolisticSummary(null);
       } finally {
         setSummaryLoading(false); // Stop loading summary
+      }
+
+      // Fetch price history for charts
+      try {
+        const priceHistoryData = await stockApi.getPriceHistory(ticker.toUpperCase(), params);
+        setPriceHistory(priceHistoryData);
+      } catch (err) {
+        console.error('Failed to fetch price history:', err);
+        setPriceHistory(null);
+      } finally {
+        setPriceHistoryLoading(false);
       }
     } catch (err: unknown) {
       console.error('Analysis error:', err);
@@ -321,6 +353,8 @@ const App: React.FC = () => {
         include_news: true,
         include_competitors: false,
         include_macro: false,
+        basket_id: selectedBasket || undefined,
+        basket_name: selectedBasket ? DEFAULT_BASKETS.find(b => b.id === selectedBasket)?.name : undefined,
       });
       setBasketAnalysis(data);
     } catch (err: unknown) {
@@ -439,6 +473,8 @@ const App: React.FC = () => {
         include_news: true,
         include_competitors: false,
         include_macro: false,
+        basket_id: selectedBasket || undefined,
+        basket_name: selectedBasket ? DEFAULT_BASKETS.find(b => b.id === selectedBasket)?.name : undefined,
       });
     } catch (err) {
       console.error('Basket PDF download error:', err);
@@ -536,7 +572,7 @@ const App: React.FC = () => {
                     <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4 pointer-events-none" />
                     <ReactDatePicker
                       selected={startDate}
-                      onChange={(date) => setStartDate(date)}
+                      onChange={(date: Date | null) => setStartDate(date)}
                       selectsStart
                       startDate={startDate}
                       endDate={endDate}
@@ -549,11 +585,11 @@ const App: React.FC = () => {
                     <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4 pointer-events-none" />
                     <ReactDatePicker
                       selected={endDate}
-                      onChange={(date) => setEndDate(date)}
+                      onChange={(date: Date | null) => setEndDate(date)}
                       selectsEnd
                       startDate={startDate}
                       endDate={endDate}
-                      minDate={startDate}
+                      minDate={startDate || undefined}
                       placeholderText="End (Today)"
                       className="pl-10 pr-4 py-2 bg-slate-100 border-transparent focus:bg-white focus:ring-2 focus:ring-indigo-500 rounded-lg outline-none w-full md:w-36 transition-all text-sm"
                       dateFormat="MMM d, yyyy"
@@ -690,7 +726,7 @@ const App: React.FC = () => {
                     <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4 pointer-events-none" />
                     <ReactDatePicker
                       selected={basketStartDate}
-                      onChange={(date) => setBasketStartDate(date)}
+                      onChange={(date: Date | null) => setBasketStartDate(date)}
                       selectsStart
                       startDate={basketStartDate}
                       endDate={basketEndDate}
@@ -703,11 +739,11 @@ const App: React.FC = () => {
                     <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4 pointer-events-none" />
                     <ReactDatePicker
                       selected={basketEndDate}
-                      onChange={(date) => setBasketEndDate(date)}
+                      onChange={(date: Date | null) => setBasketEndDate(date)}
                       selectsEnd
                       startDate={basketStartDate}
                       endDate={basketEndDate}
-                      minDate={basketStartDate}
+                      minDate={basketStartDate || undefined}
                       placeholderText="End (Today)"
                       className="pl-10 pr-4 py-2 bg-slate-100 border-transparent focus:bg-white focus:ring-2 focus:ring-indigo-500 rounded-lg outline-none w-full md:w-36 transition-all text-sm"
                       dateFormat="MMM d, yyyy"
@@ -798,6 +834,31 @@ const App: React.FC = () => {
                     </CollapsibleSection>
                   </div>
                 )}
+
+                {/* Analytics & Graphs */}
+                <div id="analytics">
+                  <CollapsibleSection
+                    title="Analytics & Graphs"
+                    icon={BarChart3}
+                    expanded={analyticsExpanded}
+                    onToggle={() => setAnalyticsExpanded(!analyticsExpanded)}
+                  >
+                    {priceHistoryLoading ? (
+                      <div className="flex items-center justify-center py-12">
+                        <div className="flex items-center gap-2 text-slate-500">
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          <span className="text-sm">Loading chart data...</span>
+                        </div>
+                      </div>
+                    ) : priceHistory ? (
+                      <StockChart data={priceHistory.data} />
+                    ) : (
+                      <div className="flex items-center justify-center py-12 bg-slate-50 rounded-lg">
+                        <p className="text-slate-500">Unable to load chart data</p>
+                      </div>
+                    )}
+                  </CollapsibleSection>
+                </div>
 
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                 {/* Left Column: Ticker Info & Summary */}
@@ -971,6 +1032,18 @@ const App: React.FC = () => {
                     </CollapsibleSection>
                   </div>
                 )}
+
+                {/* Analytics & Graphs */}
+                <div id="basket-analytics">
+                  <CollapsibleSection
+                    title="Analytics & Graphs"
+                    icon={BarChart3}
+                    expanded={true}
+                    onToggle={() => {}}
+                  >
+                    <BasketAnalytics results={basketAnalysis.results} />
+                  </CollapsibleSection>
+                </div>
 
                 <div id="basket-performance" className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
                   <div className="flex items-center justify-between mb-6">
