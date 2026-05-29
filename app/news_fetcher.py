@@ -14,11 +14,12 @@ News categories
 import os
 import json
 import logging
-import re
 from datetime import date, datetime, timedelta
 from typing import List, Dict, Optional, Tuple
 
 from openai import OpenAI, OpenAIError
+
+from .rate_limit_utils import RateLimitError, is_rate_limit_error, format_rate_limit_error
 
 logger = logging.getLogger(__name__)
 
@@ -267,6 +268,9 @@ def _batch_search_with_openai(
         return cards
 
     except OpenAIError as e:
+        if is_rate_limit_error(e):
+            logger.warning(f"Rate limit hit in batch web search: {e}")
+            raise RateLimitError(format_rate_limit_error(e)) from e
         logger.error(f"OpenAI batch web search failed: {e}")
         return []
     except Exception as e:
@@ -323,6 +327,9 @@ def _search_with_openai(
         return (ai_summary, sources, search_queries)
         
     except OpenAIError as e:
+        if is_rate_limit_error(e):
+            logger.warning(f"Rate limit hit in web search for {category}: {e}")
+            raise RateLimitError(format_rate_limit_error(e)) from e
         logger.error(f"OpenAI web search failed for {category}: {e}")
         return ("", [], [])
     except Exception as e:

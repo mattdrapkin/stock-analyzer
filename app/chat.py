@@ -16,6 +16,7 @@ from openai import OpenAI, OpenAIError
 from .models import ChatMessage, ChatResponse, TickerAnalysis
 from .analyzer import build_analysis
 from .news_fetcher import has_openai_key
+from .rate_limit_utils import RateLimitError, is_rate_limit_error, format_rate_limit_error
 
 logger = logging.getLogger(__name__)
 
@@ -205,12 +206,16 @@ def chat_with_ticker(
         response_text = completion.choices[0].message.content or ""
         logger.debug("RESPONSE: %s", response_text)
     except OpenAIError as e:
-        logger.error(f"OpenAI API error: {e}")
-        response_text = (
-            f"OpenAI API error: {e}\n\n"
-            "Falling back to raw data:\n\n"
-            + context_block
-        )
+        if is_rate_limit_error(e):
+            logger.warning(f"Rate limit hit in chat: {e}")
+            response_text = format_rate_limit_error(e) + "\n\n" + context_block
+        else:
+            logger.error(f"OpenAI API error: {e}")
+            response_text = (
+                f"OpenAI API error: {e}\n\n"
+                "Falling back to raw data:\n\n"
+                + context_block
+            )
 
     return ChatResponse(
         response=response_text,

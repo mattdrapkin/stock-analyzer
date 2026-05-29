@@ -20,6 +20,7 @@ from .news_fetcher import (
     fetch_news_summaries_for_movement,
     fetch_mock_news_for_movement,
     has_openai_key,
+    RateLimitError,
 )
 
 logger = logging.getLogger(__name__)
@@ -148,54 +149,63 @@ def build_analysis(
     # 4. Build StockMovement objects with attached news
     movements = []
     batch_cards: List[NewsCard] = []
+    rate_limited = False  # Track if we fell back due to rate limit
 
     if use_web_search:
         # Use batch web search for entire date range (much more efficient)
         # Extract major movement dates to prioritize in search
         movement_dates = [m["date"] for m in raw_movements]
 
-        raw_cards = fetch_batch_news_for_period(
-            company_name=company_name,
-            ticker=ticker,
-            from_date=start_date,
-            to_date=end_date,
-            include_competitors=include_competitors,
-            include_macro=include_macro,
-            movement_dates=movement_dates,
-        )
-
-        # Build date -> change_pct lookup from full df (all days, not just major movers)
-        df_copy = df.copy()
-        df_copy["change_pct"] = ((df_copy["Close"] - df_copy["Open"]) / df_copy["Open"]) * 100
-        date_to_change_pct = {
-            str(idx.date()): round(float(row["change_pct"]), 2)
-            for idx, row in df_copy.iterrows()
-        }
-
-        # Attach swing_pct to each card
-        batch_cards = []
-        for card in raw_cards:
-            news_card = _to_news_card(card)
-            if news_card.date and news_card.date in date_to_change_pct:
-                news_card = news_card.model_copy(update={"swing_pct": date_to_change_pct[news_card.date]})
-            batch_cards.append(news_card)
-        
-        # Attach batch summary to TickerAnalysis level, not per movement
-        for raw in raw_movements:
-            movements.append(
-                StockMovement(
-                    date=raw["date"],
-                    open=raw["open"],
-                    close=raw["close"],
-                    high=raw["high"],
-                    low=raw["low"],
-                    volume=raw["volume"],
-                    change_pct=raw["change_pct"],
-                    direction=raw["direction"],
-                    news=[],
-                    news_summaries=[],  # Empty per movement, use batch summary at analysis level
-                )
+        try:
+            raw_cards = fetch_batch_news_for_period(
+                company_name=company_name,
+                ticker=ticker,
+                from_date=start_date,
+                to_date=end_date,
+                include_competitors=include_competitors,
+                include_macro=include_macro,
+                movement_dates=movement_dates,
             )
+        except RateLimitError as e:
+            logger.warning(f"Rate limit error in build_analysis: {e}")
+            # Fall back to mock data when rate limited
+            news_source = "Mock News Data (Rate Limited)"
+            use_web_search = False
+            rate_limited = True
+            # Skip to mock data path by not setting raw_cards
+        else:
+            # Build date -> change_pct lookup from full df (all days, not just major movers)
+            df_copy = df.copy()
+            df_copy["change_pct"] = ((df_copy["Close"] - df_copy["Open"]) / df_copy["Open"]) * 100
+            date_to_change_pct = {
+                str(idx.date()): round(float(row["change_pct"]), 2)
+                for idx, row in df_copy.iterrows()
+            }
+
+            # Attach swing_pct to each card
+            batch_cards = []
+            for card in raw_cards:
+                news_card = _to_news_card(card)
+                if news_card.date and news_card.date in date_to_change_pct:
+                    news_card = news_card.model_copy(update={"swing_pct": date_to_change_pct[news_card.date]})
+                batch_cards.append(news_card)
+            
+            # Attach batch summary to TickerAnalysis level, not per movement
+            for raw in raw_movements:
+                movements.append(
+                    StockMovement(
+                        date=raw["date"],
+                        open=raw["open"],
+                        close=raw["close"],
+                        high=raw["high"],
+                        low=raw["low"],
+                        volume=raw["volume"],
+                        change_pct=raw["change_pct"],
+                        direction=raw["direction"],
+                        news=[],
+                        news_summaries=[],  # Empty per movement, use batch summary at analysis level
+                    )
+                )
     else:
         # Use mock news data for testing
         for raw in raw_movements:
@@ -250,5 +260,7 @@ def build_analysis(
         batch_news_cards=batch_cards,
     )
 
-    _cache_set(cache_key, result)
+    # Don't cache results that fell back due to rate limit
+    if not rate_limited:
+        _cache_set(cache_key, result)
     return result

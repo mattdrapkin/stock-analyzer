@@ -31,7 +31,7 @@ from .models import (
 from .analyzer import build_analysis
 from .basket_analyzer import analyze_basket
 from .chat import chat_with_ticker, has_openai_key
-from .news_fetcher import has_openai_key as news_has_openai_key
+from .news_fetcher import has_openai_key as news_has_openai_key, RateLimitError
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -257,6 +257,9 @@ def get_analysis(
             max_articles_per_category=max_articles,
             cache_ttl=CACHE_TTL,
         )
+    except RateLimitError as e:
+        logger.warning(f"Rate limit error in analysis endpoint: {e}")
+        raise HTTPException(status_code=429, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -300,6 +303,9 @@ def chat(
             include_competitors=body.include_competitors,
             include_macro=body.include_macro,
         )
+    except RateLimitError as e:
+        logger.warning(f"Rate limit error in chat endpoint: {e}")
+        raise HTTPException(status_code=429, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
