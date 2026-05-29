@@ -5,6 +5,7 @@ Basket Analysis: Compare multiple securities to find the biggest movers over a p
 import logging
 import os
 import json
+import re
 from datetime import date, datetime
 from typing import List, Dict, Optional
 
@@ -206,6 +207,7 @@ def generate_basket_holistic_summary(
     macro events, and company-specific news that drove the basket's performance.
     
     Returns None if OpenAI API key is not configured or if there's an error.
+    Returns an error message string if there's insufficient context to generate a meaningful summary.
     """
     if not OPENAI_API_KEY:
         logger.debug("OpenAI API key not configured, skipping holistic summary generation")
@@ -216,8 +218,20 @@ def generate_basket_holistic_summary(
     for result in basket_response.results:
         all_news_cards.extend(result.news_cards)
     
+    # Check if we have sufficient news context
     if not all_news_cards:
         logger.debug("No news cards available for holistic summary")
+        return None
+    
+    # Check if we have meaningful news coverage (at least 3 articles)
+    if len(all_news_cards) < 3:
+        logger.debug(f"Insufficient news cards for holistic summary: {len(all_news_cards)}")
+        return None
+    
+    # Check if there are significant movements to explain
+    significant_movers = [r for r in basket_response.results if abs(r.total_change_pct) >= 2.0]
+    if not significant_movers:
+        logger.debug("No significant movements found in basket")
         return None
     
     # Build context for the AI
@@ -292,6 +306,10 @@ Be concise and focus on the most impactful factors.
         )
         
         summary = completion.choices[0].message.content or ""
+        # Strip markdown formatting (bold, italic, etc.) using a single comprehensive regex
+        # Match **bold**, __bold__, *italic*, _italic_ in any order
+        summary = re.sub(r'(\*\*|__)(.*?)\1', r'\2', summary)  # Remove bold (**text** or __text__)
+        summary = re.sub(r'(\*|_)(?!\1)(.*?)\1', r'\2', summary)  # Remove italic (*text* or _text_) but not bold
         logger.debug(f"Generated basket holistic summary: {summary[:100]}...")
         return summary
         

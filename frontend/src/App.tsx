@@ -19,6 +19,61 @@ import { stockApi } from './api';
 import type { TickerAnalysis, StockMovement, NewsCard, BasketAnalysisResponse, BasketTickerResult } from './api';
 import { format } from 'date-fns';
 import HeaderNavigation, { type Section } from './components/HeaderNavigation';
+import LoadingScreen from './components/LoadingScreen';
+
+// Helper function to format basket summary with bold tickers and color-coded percentages
+const formatBasketSummary = (text: string, validTickers: string[]): React.ReactNode => {
+  const parts: React.ReactNode[] = [];
+  let lastIndex = 0;
+  
+  // Match ticker symbols (uppercase, 2-5 letters) followed by optional percentage (requires % sign)
+  const tickerRegex = /\b([A-Z]{2,5})\b(?:\s*\(?([+-]?\d+\.?\d*)%\)?\s*)?/g;
+  let match;
+
+  while ((match = tickerRegex.exec(text)) !== null) {
+    // Add text before the match
+    if (match.index > lastIndex) {
+      parts.push(text.slice(lastIndex, match.index));
+    }
+    
+    const ticker = match[1];
+    const percentage = match[2];
+    
+    // Only highlight if it's a valid ticker in the basket
+    if (validTickers.includes(ticker)) {
+      // Render ticker as bold
+      if (percentage) {
+        const pctValue = parseFloat(percentage);
+        // Handle NaN case
+        if (!isNaN(pctValue)) {
+          const colorClass = pctValue >= 0 ? 'text-emerald-600 font-bold' : 'text-rose-600 font-bold';
+          parts.push(
+            <span key={match.index}>
+              <span className="font-bold">{ticker}</span>
+              <span className={colorClass}> ({percentage}%)</span>
+            </span>
+          );
+        } else {
+          parts.push(<span key={match.index} className="font-bold">{ticker}</span>);
+        }
+      } else {
+        parts.push(<span key={match.index} className="font-bold">{ticker}</span>);
+      }
+    } else {
+      // Not a valid ticker, just add the matched text as-is
+      parts.push(match[0]);
+    }
+    
+    lastIndex = match.index + match[0].length;
+  }
+  
+  // Add remaining text
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex));
+  }
+  
+  return parts.length > 0 ? parts : text;
+};
 
 const App: React.FC = () => {
   const [ticker, setTicker] = useState('AAPL');
@@ -399,6 +454,12 @@ const App: React.FC = () => {
               </div>
             )}
 
+            {loading && (
+              <div className="flex justify-center py-12">
+                <LoadingScreen message="Analyzing Stock..." />
+              </div>
+            )}
+
             {analysis && (
               <div className="space-y-6">
                 {/* Holistic Summary */}
@@ -535,6 +596,12 @@ const App: React.FC = () => {
               </div>
             )}
 
+            {basketLoading && (
+              <div className="flex justify-center py-12">
+                <LoadingScreen message="Analyzing Basket..." />
+              </div>
+            )}
+
             {basketAnalysis && (
               <div className="space-y-6">
                 {/* Holistic Summary */}
@@ -547,7 +614,7 @@ const App: React.FC = () => {
                       onToggle={() => setBasketHolisticSummaryExpanded(!basketHolisticSummaryExpanded)}
                     >
                       <div className="prose prose-slate max-w-none">
-                        <p className="text-slate-700 leading-relaxed whitespace-pre-wrap">{basketAnalysis.holistic_summary}</p>
+                        <p className="text-slate-700 leading-relaxed whitespace-pre-wrap">{formatBasketSummary(basketAnalysis.holistic_summary, basketAnalysis.tickers)}</p>
                       </div>
                     </CollapsibleSection>
                   </div>
@@ -663,6 +730,39 @@ const categoryConfig = {
 const NewsCardItem: React.FC<{ card: NewsCard }> = ({ card }) => {
   const cfg = categoryConfig[card.category] ?? { bg: 'bg-slate-50 text-slate-600 border-slate-100', label: card.category };
 
+  // Parse markdown-style links in summary
+  const renderSummaryWithLinks = (text: string) => {
+    const parts: React.ReactNode[] = [];
+    let lastIndex = 0;
+    const linkRegex = /\[([^\]]+)\]\(([^)]+)\)/g;
+    let match;
+
+    while ((match = linkRegex.exec(text)) !== null) {
+      // Add text before the link
+      if (match.index > lastIndex) {
+        parts.push(text.slice(lastIndex, match.index));
+      }
+      // Add the link
+      parts.push(
+        <a
+          key={match.index}
+          href={match[2]}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-indigo-600 hover:text-indigo-800 underline"
+        >
+          {match[1]}
+        </a>
+      );
+      lastIndex = match.index + match[0].length;
+    }
+    // Add remaining text
+    if (lastIndex < text.length) {
+      parts.push(text.slice(lastIndex));
+    }
+    return parts.length > 0 ? parts : text;
+  };
+
   const inner = (
     <div className={`group h-full bg-white border border-slate-200 rounded-xl p-4 transition-all hover:shadow-md hover:border-indigo-200 flex flex-col gap-2 ${
       card.url ? 'cursor-pointer' : ''
@@ -706,7 +806,7 @@ const NewsCardItem: React.FC<{ card: NewsCard }> = ({ card }) => {
         )}
       </h4>
 
-      <p className="text-sm text-slate-600 leading-relaxed flex-1">{card.summary}</p>
+      <p className="text-sm text-slate-600 leading-relaxed flex-1">{renderSummaryWithLinks(card.summary)}</p>
 
       {card.relevance && (
         <p className="text-xs text-slate-400 italic border-t border-slate-100 pt-2 mt-auto">
@@ -735,7 +835,7 @@ const BasketResultCard: React.FC<{ result: BasketTickerResult; rank: number }> =
     <div className="bg-slate-50 rounded-xl overflow-hidden hover:bg-slate-100 transition-colors">
       <div 
         className="p-4 flex items-center gap-4 cursor-pointer"
-        onClick={() => hasNews && setExpanded(!expanded)}
+        onClick={() => setExpanded(!expanded)}
       >
         <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 font-bold text-sm ${
           rank <= 3 ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-600'
@@ -768,20 +868,24 @@ const BasketResultCard: React.FC<{ result: BasketTickerResult; rank: number }> =
             {result.direction}
           </div>
         </div>
-        {hasNews && (
-          <div className={`p-2 rounded-full transition-transform ${expanded ? 'rotate-180 bg-slate-200' : 'text-slate-400'}`}>
-            <ChevronDown className="w-5 h-5" />
-          </div>
-        )}
+        <div className={`p-2 rounded-full transition-transform ${expanded ? 'rotate-180 bg-slate-200' : 'text-slate-400'}`}>
+          <ChevronDown className="w-5 h-5" />
+        </div>
       </div>
 
-      {expanded && hasNews && (
+      {expanded && (
         <div className="px-4 pb-4 border-t border-slate-200 pt-4">
           <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-3">Related News</h4>
           <div className="grid grid-cols-1 gap-3">
-            {result.news_cards.map((card, j) => (
-              <NewsCardItem key={j} card={card} />
-            ))}
+            {hasNews ? (
+              result.news_cards.map((card, j) => (
+                <NewsCardItem key={j} card={card} />
+              ))
+            ) : (
+              <div className="bg-slate-50 p-4 rounded-xl text-center border border-dashed border-slate-200">
+                <p className="text-sm text-slate-400">No news articles found for this stock.</p>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -815,7 +919,7 @@ const CollapsibleSection: React.FC<CollapsibleSectionProps> = ({
     <div className={`bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden ${className}`}>
       <button
         onClick={onToggle}
-        className="w-full p-4 md:p-6 flex items-center justify-between gap-4 hover:bg-slate-50 transition-colors text-left"
+        className="w-full py-3 px-4 md:py-3 md:px-6 flex items-center justify-between gap-4 hover:bg-slate-50 transition-colors text-left"
       >
         <div className="flex items-center gap-3">
           <Icon className="text-indigo-600 w-5 h-5" />
