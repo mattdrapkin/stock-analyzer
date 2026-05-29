@@ -36,7 +36,6 @@ const App: React.FC = () => {
   const [basketAnalysis, setBasketAnalysis] = useState<BasketAnalysisResponse | null>(null);
   const [basketLoading, setBasketLoading] = useState(false);
   const [basketError, setBasketError] = useState<string | null>(null);
-  const [basketIncludeNews, setBasketIncludeNews] = useState(false);
   const [basketHolisticSummaryExpanded, setBasketHolisticSummaryExpanded] = useState(true);
 
   // Collapsible sections state
@@ -165,7 +164,7 @@ const App: React.FC = () => {
         tickers: tickerList,
         start_date: format(resolvedStart, 'yyyy-MM-dd'),
         end_date: format(resolvedEnd, 'yyyy-MM-dd'),
-        include_news: basketIncludeNews,
+        include_news: true,
         include_competitors: false,
         include_macro: false,
       });
@@ -337,15 +336,6 @@ const App: React.FC = () => {
                   </button>
                 )}
               </div>
-              <label className="flex items-center gap-2 px-3 py-2 bg-slate-100 rounded-lg cursor-pointer hover:bg-slate-200 transition-colors">
-                <input
-                  type="checkbox"
-                  checked={basketIncludeNews}
-                  onChange={(e) => setBasketIncludeNews(e.target.checked)}
-                  className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500"
-                />
-                <span className="text-sm text-slate-700 font-medium">Include News</span>
-              </label>
               <button
                 type="submit"
                 disabled={basketLoading}
