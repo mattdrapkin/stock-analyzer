@@ -8,13 +8,14 @@ import json
 import re
 from datetime import date, datetime
 from typing import List, Dict, Optional
+import pandas as pd
 
 from openai import OpenAI, OpenAIError
 
 from .models import BasketAnalysisResponse, BasketTickerResult, NewsCard
 from .stock_data import fetch_price_history, get_ticker_info
 from .news_fetcher import fetch_batch_news_for_period, has_openai_key, RateLimitError
-from .rate_limit_utils import is_rate_limit_error, create_rate_limit_error
+from .rate_limit_utils import is_rate_limit_error, create_rate_limit_error, get_rate_limiter
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +149,10 @@ def fetch_basket_news_batch(
         return {}
 
     try:
+        # Apply rate limiting before making the API call
+        rate_limiter = get_rate_limiter()
+        rate_limiter.wait_if_needed()
+        
         client = OpenAI(api_key=OPENAI_API_KEY)
 
         # Build prompt with all tickers
@@ -256,7 +261,7 @@ def generate_basket_holistic_summary(
         return None
     
     # Check if there are significant movements to explain
-    significant_movers = [r for r in basket_response.results if abs(r.total_change_pct) >= 2.0]
+    significant_movers = [r for r in basket_response.results if r.total_change_pct is not None and abs(r.total_change_pct) >= 2.0]
     if not significant_movers:
         logger.debug("No significant movements found in basket")
         return None
@@ -322,6 +327,10 @@ IMPORTANT: This is a web application interface, not a conversational chat. Never
 """
     
     try:
+        # Apply rate limiting before making the API call
+        rate_limiter = get_rate_limiter()
+        rate_limiter.wait_if_needed()
+        
         client = OpenAI(api_key=OPENAI_API_KEY)
         completion = client.chat.completions.create(
             model=OPENAI_MODEL,
@@ -405,7 +414,13 @@ def analyze_basket(
             # Get first and last close prices
             start_price = float(df.iloc[0]['Close'])
             end_price = float(df.iloc[-1]['Close'])
-            
+
+            # Validate price data - check for NaN or invalid values
+            if pd.isna(start_price) or pd.isna(end_price) or start_price <= 0 or end_price <= 0:
+                logger.warning(f"Invalid price data for {ticker}: start={start_price}, end={end_price}")
+                failed_tickers.append(ticker)
+                continue
+
             # Calculate total percentage change
             total_change_pct = ((end_price - start_price) / start_price) * 100
             direction = "up" if total_change_pct >= 0 else "down"
@@ -441,7 +456,10 @@ def analyze_basket(
             continue
     
     # Sort by absolute percentage change (biggest movers first) BEFORE news fetching
-    results.sort(key=lambda x: abs(x.total_change_pct), reverse=True)
+    # Filter out results with None total_change_pct (shouldn't happen due to validation, but defensive)
+    valid_results = [r for r in results if r.total_change_pct is not None]
+    valid_results.sort(key=lambda x: abs(x.total_change_pct), reverse=True)
+    results = valid_results
     
     # Batch fetch news for top N biggest movers in a single API call
     if include_news and ticker_info_list:

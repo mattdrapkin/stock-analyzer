@@ -148,9 +148,9 @@ export interface BasketTickerResult {
   company_name?: string;
   sector?: string;
   industry?: string;
-  start_price: number;
-  end_price: number;
-  total_change_pct: number;
+  start_price: number | null;
+  end_price: number | null;
+  total_change_pct: number | null;
   direction: 'up' | 'down';
   news_cards: NewsCard[];
 }

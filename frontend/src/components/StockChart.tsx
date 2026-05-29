@@ -29,7 +29,28 @@ interface ChartDataPoint extends PriceDataPoint {
   formattedDate: string;
   ma20: number | null;
   ma50: number | null;
+  percentChange: number;
 }
+
+// Custom dot component for big mover days
+const BigMoverDot = (props: any) => {
+  const { cx, cy, payload } = props;
+  const percentChange = payload?.percentChange || 0;
+  const isBigMover = Math.abs(percentChange) >= 3;
+
+  if (!isBigMover) return null;
+
+  return (
+    <circle
+      cx={cx}
+      cy={cy}
+      r={4}
+      fill={percentChange > 0 ? '#10b981' : '#ef4444'}
+      stroke="#fff"
+      strokeWidth={1.5}
+    />
+  );
+};
 
 // Custom tooltip components (defined outside to avoid recreation on render)
 const CustomTooltip = ({ active, payload, label }: any) => {
@@ -80,7 +101,7 @@ const StockChart: React.FC<StockChartProps> = ({ data }) => {
     }),
   }));
 
-  // Calculate moving averages
+  // Calculate moving averages and percent change
   const dataWithMA: ChartDataPoint[] = chartData.map((point, index) => ({
     ...point,
     ma20: index >= 19
@@ -89,6 +110,9 @@ const StockChart: React.FC<StockChartProps> = ({ data }) => {
     ma50: index >= 49
       ? chartData.slice(index - 49, index + 1).reduce((sum, p) => sum + p.close, 0) / 50
       : null,
+    percentChange: index > 0
+      ? ((point.close - chartData[index - 1].close) / chartData[index - 1].close) * 100
+      : 0,
   }));
 
   return (
@@ -123,6 +147,7 @@ const StockChart: React.FC<StockChartProps> = ({ data }) => {
               strokeWidth={2}
               dot={false}
               name="Close Price"
+              activeDot={<BigMoverDot />}
             />
             {dataWithMA.some((d) => d.ma20 !== null) && (
               <Line

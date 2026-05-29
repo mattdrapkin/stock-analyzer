@@ -146,6 +146,7 @@ const App: React.FC = () => {
 
   // Sort state
   const [movementSort, setMovementSort] = useState<'date' | 'biggest_winners' | 'biggest_losers'>('date');
+  const [filterNewsOnly, setFilterNewsOnly] = useState(false);
 
   // Header navigation state
   const [activeSection, setActiveSection] = useState<string>('');
@@ -161,9 +162,18 @@ const App: React.FC = () => {
   // Sort movements based on selected sort option
   const sortedMovements = React.useMemo(() => {
     if (!analysis) return [];
-    
-    const movements = [...analysis.movements];
-    
+
+    let movements = [...analysis.movements];
+
+    // Filter by news if checkbox is checked
+    if (filterNewsOnly && analysis.batch_news_cards) {
+      const newsDates = new Set(analysis.batch_news_cards.filter(card => card.date).map(card => card.date));
+      movements = movements.filter(move => {
+        const moveDateStr = new Date(move.date).toLocaleDateString('en-CA');
+        return newsDates.has(moveDateStr);
+      });
+    }
+
     switch (movementSort) {
       case 'date':
         // Default: already sorted by date (newest first from API)
@@ -177,7 +187,7 @@ const App: React.FC = () => {
       default:
         return movements;
     }
-  }, [analysis, movementSort]);
+  }, [analysis, movementSort, filterNewsOnly]);
 
   // Define navigation sections based on view mode and data
   const navSections: Section[] = [
@@ -916,18 +926,29 @@ const App: React.FC = () => {
                         {analysis.total_movements}
                       </span>
                     </h3>
-                    <div className="flex items-center gap-2">
-                      <label className="text-sm text-slate-600 font-medium">Sort by:</label>
-                      <select
-                        value={movementSort}
-                        onChange={(e) => setMovementSort(e.target.value as 'date' | 'biggest_winners' | 'biggest_losers')}
-                        title="Sort movements by date or magnitude"
-                        className="px-3 py-1.5 bg-slate-100 border-transparent focus:bg-white focus:ring-2 focus:ring-indigo-500 rounded-lg outline-none text-sm font-medium transition-all cursor-pointer"
-                      >
-                        <option value="date">Date</option>
-                        <option value="biggest_winners">Biggest Winners</option>
-                        <option value="biggest_losers">Biggest Losers</option>
-                      </select>
+                    <div className="flex items-center gap-3">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={filterNewsOnly}
+                          onChange={(e) => setFilterNewsOnly(e.target.checked)}
+                          className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                        />
+                        <span className="text-sm text-slate-700">Has news</span>
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <label className="text-sm text-slate-600 font-medium">Sort by:</label>
+                        <select
+                          value={movementSort}
+                          onChange={(e) => setMovementSort(e.target.value as 'date' | 'biggest_winners' | 'biggest_losers')}
+                          title="Sort movements by date or magnitude"
+                          className="px-3 py-1.5 bg-slate-100 border-transparent focus:bg-white focus:ring-2 focus:ring-indigo-500 rounded-lg outline-none text-sm font-medium transition-all cursor-pointer"
+                        >
+                          <option value="date">Date</option>
+                          <option value="biggest_winners">Biggest Winners</option>
+                          <option value="biggest_losers">Biggest Losers</option>
+                        </select>
+                      </div>
                     </div>
                   </div>
 

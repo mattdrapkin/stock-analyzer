@@ -108,9 +108,9 @@ class BasketTickerResult(BaseModel):
     company_name: Optional[str] = None
     sector: Optional[str] = None
     industry: Optional[str] = None
-    start_price: float
-    end_price: float
-    total_change_pct: float
+    start_price: Optional[float] = None
+    end_price: Optional[float] = None
+    total_change_pct: Optional[float] = None
     direction: str  # "up" or "down"
     news_cards: List[NewsCard] = []  # News articles for this specific stock
 

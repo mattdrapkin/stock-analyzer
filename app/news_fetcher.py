@@ -20,7 +20,7 @@ from typing import List, Dict, Optional, Tuple
 
 from openai import OpenAI, OpenAIError
 
-from .rate_limit_utils import RateLimitError, is_rate_limit_error, create_rate_limit_error
+from .rate_limit_utils import RateLimitError, is_rate_limit_error, create_rate_limit_error, get_rate_limiter
 
 logger = logging.getLogger(__name__)
 
@@ -223,6 +223,10 @@ def _batch_search_with_openai(
         return []
 
     try:
+        # Apply rate limiting before making the API call
+        rate_limiter = get_rate_limiter()
+        rate_limiter.wait_if_needed()
+        
         client = OpenAI(api_key=OPENAI_API_KEY)
 
         categories = [
@@ -298,6 +302,10 @@ def _search_with_openai(
         return ("", [], [])
 
     try:
+        # Apply rate limiting before making the API call
+        rate_limiter = get_rate_limiter()
+        rate_limiter.wait_if_needed()
+        
         client = OpenAI(api_key=OPENAI_API_KEY)
         
         # Use Chat Completions with search-enabled model

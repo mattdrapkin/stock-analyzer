@@ -10,7 +10,7 @@ from openai import OpenAI, OpenAIError
 
 from .models import FunFactsRequest, FunFactsResponse
 from .news_fetcher import has_openai_key
-from .rate_limit_utils import is_rate_limit_error, create_rate_limit_error, RateLimitError
+from .rate_limit_utils import is_rate_limit_error, create_rate_limit_error, RateLimitError, get_rate_limiter
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +77,10 @@ def generate_fun_facts(request: FunFactsRequest) -> FunFactsResponse:
     logger.info(f"User prompt: {user_prompt}")
 
     try:
+        # Apply rate limiting before making the API call
+        rate_limiter = get_rate_limiter()
+        rate_limiter.wait_if_needed()
+        
         client = OpenAI(api_key=OPENAI_API_KEY)
         completion = client.chat.completions.create(
             model=OPENAI_MODEL,

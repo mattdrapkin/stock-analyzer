@@ -16,7 +16,7 @@ from openai import OpenAI, OpenAIError
 from .models import ChatMessage, ChatResponse, TickerAnalysis
 from .analyzer import build_analysis
 from .news_fetcher import has_openai_key
-from .rate_limit_utils import RateLimitError, is_rate_limit_error, create_rate_limit_error
+from .rate_limit_utils import RateLimitError, is_rate_limit_error, create_rate_limit_error, get_rate_limiter
 
 logger = logging.getLogger(__name__)
 
@@ -129,11 +129,29 @@ The structured data provided below is your sole source of truth. Do not use outs
 """
 
 
-def _no_llm_summary(analysis: TickerAnalysis, message: str) -> str:
-    """Fallback response when OpenAI key is not configured."""
+def _has_meaningful_context(analysis: TickerAnalysis) -> bool:
+    """
+    Check if the analysis has meaningful data to justify an LLM call.
+    
+    Returns True if:
+    - There are major movements detected, OR
+    - There are news cards (from web search), OR
+    - There are individual news articles (from mock data)
+    
+    This prevents wasting API calls on empty/minimal context.
+    """
+    has_movements = analysis.total_movements > 0
+    has_news_cards = len(analysis.batch_news_cards) > 0
+    has_individual_news = any(len(mv.news) > 0 for mv in analysis.movements)
+    
+    return has_movements or has_news_cards or has_individual_news
+
+
+def _no_llm_summary(analysis: TickerAnalysis, message: str, reason: str = "OpenAI API key not configured") -> str:
+    """Fallback response when OpenAI key is not configured or context is insufficient."""
     ctx = _format_analysis_as_context(analysis)
     return (
-        "⚠️  OpenAI API key not configured — returning structured summary instead of AI analysis.\n\n"
+        f"⚠️  {reason} — returning structured summary instead of AI analysis.\n\n"
         f"Your question: {message}\n\n"
         f"{ctx}\n\n"
         "To enable AI-powered chat analysis, set OPENAI_API_KEY in your .env file."
@@ -179,6 +197,16 @@ def chat_with_ticker(
             context_used=False,
         )
 
+    # Check if there's meaningful context before making the API call
+    if not _has_meaningful_context(analysis):
+        logger.info(f"Insufficient context for {ticker} (no movements or news), skipping LLM call")
+        return ChatResponse(
+            response=_no_llm_summary(analysis, message, "Insufficient context for AI analysis"),
+            ticker=ticker,
+            movements_analyzed=analysis.total_movements,
+            context_used=False,
+        )
+
     context_block = _format_analysis_as_context(analysis)
     logger.debug("=== CONTEXT PROVIDED TO LLM ===\n%s\n=== END CONTEXT ===", context_block)
 
@@ -197,6 +225,10 @@ def chat_with_ticker(
     messages.append({"role": "user", "content": message})
     
     try:
+        # Apply rate limiting before making the API call
+        rate_limiter = get_rate_limiter()
+        rate_limiter.wait_if_needed()
+        
         client = OpenAI(api_key=OPENAI_API_KEY)
         completion = client.chat.completions.create(
             model=OPENAI_MODEL,

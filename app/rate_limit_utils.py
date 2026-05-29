@@ -2,12 +2,71 @@
 Utility functions for handling OpenAI API rate limit errors.
 """
 
+import os
 import re
 import logging
+import time
+import threading
 from typing import Optional, Dict, Any
 from openai import OpenAIError
 
 logger = logging.getLogger(__name__)
+
+
+# ── Simple rate limiter ────────────────────────────────────────────────────────
+
+class RateLimiter:
+    """
+    Simple token bucket rate limiter to prevent hitting OpenAI API rate limits.
+    
+    This limits the number of requests per minute across all API calls.
+    """
+    
+    def __init__(self, max_requests_per_minute: int = 50):
+        self.max_requests = max_requests_per_minute
+        self.requests = []
+        self.lock = threading.Lock()
+    
+    def acquire(self) -> bool:
+        """
+        Try to acquire a request token. Returns True if allowed, False if rate limited.
+        If rate limited, will log the wait time.
+        """
+        with self.lock:
+            now = time.time()
+            # Remove requests older than 1 minute
+            self.requests = [t for t in self.requests if now - t < 60]
+            
+            if len(self.requests) < self.max_requests:
+                self.requests.append(now)
+                return True
+            else:
+                # Calculate wait time until oldest request expires
+                oldest = min(self.requests)
+                wait_time = 60 - (now - oldest)
+                logger.warning(f"Rate limit reached: {len(self.requests)}/{self.max_requests} requests in last minute. Wait {wait_time:.1f}s")
+                return False
+    
+    def wait_if_needed(self) -> None:
+        """
+        Block until a request token is available.
+        """
+        while not self.acquire():
+            time.sleep(0.5)
+
+
+# Global rate limiter instance (configurable via environment variable)
+try:
+    _default_rpm = int(os.getenv("OPENAI_MAX_RPM", "50"))
+except ValueError:
+    logger.warning(f"Invalid OPENAI_MAX_RPM value, using default of 50")
+    _default_rpm = 50
+_global_rate_limiter = RateLimiter(max_requests_per_minute=_default_rpm)
+
+
+def get_rate_limiter() -> RateLimiter:
+    """Get the global rate limiter instance."""
+    return _global_rate_limiter
 
 
 class RateLimitError(Exception):
