@@ -16,14 +16,18 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({
 }) => {
   const [currentFactIndex, setCurrentFactIndex] = useState(0);
   const [isTransitioning, setIsTransitioning] = useState(false);
-  const [facts, setFacts] = useState<string[]>(() => {
-    // Shuffle default facts on initialization
-    const shuffled = [...DEFAULT_FACTS];
+  const shuffleFacts = (factsArray: string[]): string[] => {
+    const shuffled = [...factsArray];
     for (let i = shuffled.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
     }
     return shuffled;
+  };
+
+  const [facts, setFacts] = useState<string[]>(() => {
+    // Shuffle default facts on initialization
+    return shuffleFacts(DEFAULT_FACTS);
   });
 
   useEffect(() => {
@@ -33,7 +37,7 @@ const LoadingScreen: React.FC<LoadingScreenProps> = ({
         try {
           const response = await stockApi.getFunFacts({ ticker, basket });
           if (response.facts && response.facts.length > 0) {
-            setFacts(response.facts);
+            setFacts(shuffleFacts(response.facts));
           }
         } catch (error) {
           // Keep using default facts on error

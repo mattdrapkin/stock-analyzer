@@ -2,6 +2,7 @@
 PDF generation utility for stock analysis reports.
 """
 
+import re
 from datetime import datetime, timezone
 from typing import Optional
 from io import BytesIO
@@ -13,6 +14,39 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib import colors
 from reportlab.lib.colors import blue
 from .models import TickerAnalysis, BasketAnalysisResponse
+
+
+def parse_markdown_to_reportlab(text: str) -> str:
+    """
+    Convert markdown text to ReportLab-compatible format.
+    
+    Handles:
+    - Links: [text](url) -> <link href="url"><u>text</u></link>
+    - Bold: **text** -> <b>text</b>
+    - Italic: *text* -> <i>text</i>
+    """
+    if not text:
+        return text
+    
+    # Escape HTML special characters first
+    text = text.replace('&', '&amp;')
+    text = text.replace('<', '&lt;')
+    text = text.replace('>', '&gt;')
+    
+    # Convert markdown links: [text](url) to <link href="url"><u>text</u></link>
+    text = re.sub(
+        r'\[([^\]]+)\]\(([^\)]+)\)',
+        r'<link href="\2" color="blue"><u>\1</u></link>',
+        text
+    )
+    
+    # Convert bold: **text** to <b>text</b>
+    text = re.sub(r'\*\*([^*]+)\*\*', r'<b>\1</b>', text)
+    
+    # Convert italic: *text* to <i>text</i>
+    text = re.sub(r'\*([^*]+)\*', r'<i>\1</i>', text)
+    
+    return text
 
 
 def generate_analysis_pdf(analysis: TickerAnalysis, params: dict) -> bytes:
@@ -173,11 +207,12 @@ def generate_analysis_pdf(analysis: TickerAnalysis, params: dict) -> bytes:
     if analysis.batch_news_cards and len(analysis.batch_news_cards) > 0:
         story.append(Paragraph(f"News Highlights ({len(analysis.batch_news_cards)} articles)", heading_style))
         for i, card in enumerate(analysis.batch_news_cards[:10], 1):  # Limit to first 10 articles
-            # Make title clickable if URL is available
+            # Parse markdown in title and handle links
+            parsed_title = parse_markdown_to_reportlab(card.title)
             if card.url:
-                title_text = f'{i}. <link href="{card.url}" color="blue">{card.title}</link>'
+                title_text = f'{i}. <link href="{card.url}" color="blue"><u>{parsed_title}</u></link>'
             else:
-                title_text = f"{i}. {card.title}"
+                title_text = f"{i}. {parsed_title}"
             
             story.append(Paragraph(title_text, ParagraphStyle(
                 'NewsTitle',
@@ -188,7 +223,8 @@ def generate_analysis_pdf(analysis: TickerAnalysis, params: dict) -> bytes:
                 textColor=blue if card.url else colors.black,
             )))
             if card.summary:
-                story.append(Paragraph(card.summary, ParagraphStyle(
+                parsed_summary = parse_markdown_to_reportlab(card.summary)
+                story.append(Paragraph(parsed_summary, ParagraphStyle(
                     'NewsSummary',
                     parent=styles['Normal'],
                     fontSize=9,
@@ -375,7 +411,8 @@ def generate_basket_pdf(basket_response: BasketAnalysisResponse, params: dict) -
     # Holistic Summary
     if basket_response.holistic_summary:
         story.append(Paragraph("Holistic Summary", heading_style))
-        story.append(Paragraph(basket_response.holistic_summary, normal_style))
+        parsed_summary = parse_markdown_to_reportlab(basket_response.holistic_summary)
+        story.append(Paragraph(parsed_summary, normal_style))
         story.append(Spacer(1, 0.3 * inch))
     
     # News Highlights by Ticker
@@ -391,10 +428,12 @@ def generate_basket_pdf(basket_response: BasketAnalysisResponse, params: dict) -
                     spaceAfter=8,
                 )))
                 for i, card in enumerate(result.news_cards[:5], 1):  # Limit to first 5 articles per ticker
+                    # Parse markdown in title and handle links
+                    parsed_title = parse_markdown_to_reportlab(card.title)
                     if card.url:
-                        title_text = f'{i}. <link href="{card.url}" color="blue">{card.title}</link>'
+                        title_text = f'{i}. <link href="{card.url}" color="blue"><u>{parsed_title}</u></link>'
                     else:
-                        title_text = f"{i}. {card.title}"
+                        title_text = f"{i}. {parsed_title}"
                     
                     story.append(Paragraph(title_text, ParagraphStyle(
                         'NewsTitle',
@@ -405,7 +444,8 @@ def generate_basket_pdf(basket_response: BasketAnalysisResponse, params: dict) -
                         textColor=blue if card.url else colors.black,
                     )))
                     if card.summary:
-                        story.append(Paragraph(card.summary, ParagraphStyle(
+                        parsed_summary = parse_markdown_to_reportlab(card.summary)
+                        story.append(Paragraph(parsed_summary, ParagraphStyle(
                             'NewsSummary',
                             parent=styles['Normal'],
                             fontSize=9,
