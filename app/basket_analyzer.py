@@ -23,40 +23,9 @@ OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-5.4-nano")
 
 # Structured JSON prompt for basket news fetching
 BASKET_NEWS_SYSTEM_PROMPT = """\
-You are a financial research assistant with real-time web search access.
-Your task is to find news articles that explain stock price movements for multiple companies.
+Return ONLY valid JSON: {"ticker_news": {"TICKER": [{"title": "...", "summary": "...", "date": "YYYY-MM-DD", "source_name": "...", "url": "https://...", "category": "company|competitor|macro", "relevance": "..."}]}}.
 
-You MUST respond ONLY with a valid JSON object — no markdown, no code blocks, no preamble.
-
-Required JSON format:
-{
-  "ticker_news": {
-    "TICKER1": [
-      {
-        "title": "Exact headline of the article",
-        "summary": "One sentence capturing the key investment takeaway",
-        "date": "YYYY-MM-DD",
-        "source_name": "Publication name (e.g. Bloomberg, Reuters, WSJ, CNBC)",
-        "url": "https://full-url-to-article",
-        "category": "company",
-        "relevance": "One sentence explaining why this likely impacted the stock price"
-      }
-    ],
-    "TICKER2": [...]
-  }
-}
-
-Rules:
-- CRITICAL: Attempt to find at least 1 news article for AT LEAST 50% of the tickers provided
-- Prioritize finding diverse coverage across different companies rather than many articles for one company
-- Return 2 to 4 articles per ticker (not 3-5) to allow room for more tickers
-- If you find news for fewer than 50% of tickers, expand your search to include broader company news, sector news, or recent developments
-- category must be exactly one of: "company", "competitor", "macro"
-- date must be in YYYY-MM-DD format, or null if unknown
-- url must be a real, complete URL starting with https://, or null if unavailable
-- title, summary, and relevance must be non-empty strings
-- If no news found for a ticker after thorough search, return an empty array for that ticker
-- Do not include any text outside the JSON object
+Rules: Find news for 50%+ of tickers. 2-3 articles per ticker. category must be company/competitor/macro. No markdown or extra text.
 """
 
 
@@ -163,22 +132,18 @@ def fetch_basket_news_batch(
         ticker_list = [f"{info['ticker']} ({info['company_name']})" for info in ticker_info]
         ticker_str = ", ".join(ticker_list)
 
-        categories = ["company-specific events (earnings, product launches, executive changes, lawsuits, regulatory actions)"]
+        categories = ["company events"]
         if include_competitors:
-            categories.append("competitor and industry developments (competitor earnings, M&A, market share changes, sector-wide trends)")
+            categories.append("competitor/industry")
         if include_macro:
-            categories.append("macroeconomic events (Federal Reserve decisions, interest rate changes, inflation data, GDP reports, geopolitical events)")
-
-        categories_str = "; ".join(categories)
+            categories.append("macro")
+        categories_str = ", ".join(categories)
 
         prompt = (
-            f"Find the most impactful news articles for these companies: {ticker_str} "
-            f"published between {from_date.isoformat()} and {to_date.isoformat()}. "
-            f"Cover: {categories_str}. "
-            f"Focus on news that would explain significant stock price movements. "
-            f"CRITICAL: Ensure you find news for at least 50% of the companies listed. "
-            f"Prioritize diverse coverage across different companies over many articles for one company. "
-            f"Return 2-4 articles per company if available."
+            f"News for {ticker_str} "
+            f"{from_date.isoformat()} to {to_date.isoformat()}. "
+            f"Topics: {categories_str}. "
+            f"2-3 articles per ticker. 50%+ coverage."
         )
 
         response = client.chat.completions.create(
@@ -190,6 +155,7 @@ def fetch_basket_news_batch(
         )
 
         content = response.choices[0].message.content or ""
+        logger.info(f"OpenAI response (first 300 chars): {content[:300]}")
         raw_news_dict = _parse_basket_news_cards_from_response(content)
         
         # Convert to NewsCard objects
@@ -419,6 +385,7 @@ def analyze_basket(
     
     # Batch fetch news for all tickers in a single API call
     if include_news and ticker_info_list:
+        logger.info(f"Fetching batch news for {len(ticker_info_list)} tickers")
         try:
             batch_news = fetch_basket_news_batch(
                 ticker_info=ticker_info_list,
@@ -428,11 +395,15 @@ def analyze_basket(
                 include_macro=include_macro,
             )
             
+            logger.info(f"Batch news fetch returned data for {len(batch_news)} tickers")
+            
             # Attach news cards to corresponding results
             for result in results:
                 if result.ticker in batch_news:
                     result.news_cards = batch_news[result.ticker]
-                    logger.debug(f"Attached {len(result.news_cards)} news cards to {result.ticker}")
+                    logger.info(f"Attached {len(result.news_cards)} news cards to {result.ticker}")
+                else:
+                    logger.warning(f"No news found for {result.ticker}")
         except RateLimitError as e:
             logger.warning(f"Rate limit hit in batch news fetch: {e}")
             news_source = "OpenAI Web Search (Rate Limited)"
@@ -440,6 +411,8 @@ def analyze_basket(
         except Exception as e:
             logger.warning(f"Failed to fetch batch news: {e}")
             # Continue without news
+    else:
+        logger.info(f"Skipping news fetch - include_news={include_news}, ticker_info_list length={len(ticker_info_list)}")
     
     # Sort by absolute percentage change (biggest movers first)
     results.sort(key=lambda x: abs(x.total_change_pct), reverse=True)

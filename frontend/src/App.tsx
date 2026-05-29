@@ -124,11 +124,21 @@ const App: React.FC = () => {
         setSummaryLoading(false); // Stop loading summary
       }
     } catch (err: unknown) {
+      console.error('Analysis error:', err);
       if (err && typeof err === 'object' && 'response' in err) {
-        const axiosError = err as { response: { data: { detail: string } } };
-        setError(axiosError.response?.data?.detail || 'Failed to fetch analysis');
+        const axiosError = err as { response?: { status?: number; data?: { detail?: string } } };
+        const errorDetail = axiosError.response?.data?.detail;
+        if (errorDetail) {
+          setError(errorDetail);
+        } else if (axiosError.response?.status === 429) {
+          setError('Rate limit reached. Please wait a moment before trying again.');
+        } else {
+          setError('Failed to fetch analysis. Please try again.');
+        }
+      } else if (err instanceof Error) {
+        setError(err.message || 'Failed to fetch analysis. Please try again.');
       } else {
-        setError('Failed to fetch analysis');
+        setError('Failed to fetch analysis. Please try again.');
       }
       setAnalysis(null);
     } finally {
@@ -170,11 +180,21 @@ const App: React.FC = () => {
       });
       setBasketAnalysis(data);
     } catch (err: unknown) {
+      console.error('Basket analysis error:', err);
       if (err && typeof err === 'object' && 'response' in err) {
-        const axiosError = err as { response: { data: { detail: string } } };
-        setBasketError(axiosError.response?.data?.detail || 'Failed to analyze basket');
+        const axiosError = err as { response?: { status?: number; data?: { detail?: string } } };
+        const errorDetail = axiosError.response?.data?.detail;
+        if (errorDetail) {
+          setBasketError(errorDetail);
+        } else if (axiosError.response?.status === 429) {
+          setBasketError('Rate limit reached. Please wait a moment before trying again.');
+        } else {
+          setBasketError('Failed to analyze basket. Please try again.');
+        }
+      } else if (err instanceof Error) {
+        setBasketError(err.message || 'Failed to analyze basket. Please try again.');
       } else {
-        setBasketError('Failed to analyze basket');
+        setBasketError('Failed to analyze basket. Please try again.');
       }
       setBasketAnalysis(null);
     } finally {

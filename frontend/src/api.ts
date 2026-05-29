@@ -157,14 +157,24 @@ export const stockApi = {
     include_competitors?: boolean;
     include_macro?: boolean;
   }) => {
-    const { include_news, include_competitors, include_macro, ...bodyData } = data;
-    const response = await api.post<BasketAnalysisResponse>('/basket', bodyData, {
-      params: {
-        include_news,
-        include_competitors,
-        include_macro,
+    try {
+      const { include_news, include_competitors, include_macro, ...bodyData } = data;
+      const response = await api.post<BasketAnalysisResponse>('/basket', bodyData, {
+        params: {
+          include_news,
+          include_competitors,
+          include_macro,
+        }
+      });
+      return response.data;
+    } catch (error: unknown) {
+      if (error && typeof error === 'object' && 'response' in error) {
+        const err = error as { response?: { status?: number; data?: { detail?: string } } };
+        if (err.response?.status === 429) {
+          throw new Error(err.response.data?.detail || 'Rate limit reached. Please wait a moment before trying again.', { cause: error });
+        }
       }
-    });
-    return response.data;
+      throw error;
+    }
   }
 };
