@@ -75,6 +75,12 @@ const App: React.FC = () => {
       visible: viewMode === 'single' && analysis?.batch_news_cards && analysis.batch_news_cards.length > 0
     },
     {
+      id: 'basket-holistic-summary',
+      label: 'Basket Summary',
+      icon: Info,
+      visible: viewMode === 'basket' && !!basketAnalysis?.holistic_summary
+    },
+    {
       id: 'basket-performance',
       label: 'Basket Performance',
       icon: Layers,
