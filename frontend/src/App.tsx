@@ -36,6 +36,8 @@ const App: React.FC = () => {
   const [basketAnalysis, setBasketAnalysis] = useState<BasketAnalysisResponse | null>(null);
   const [basketLoading, setBasketLoading] = useState(false);
   const [basketError, setBasketError] = useState<string | null>(null);
+  const [basketIncludeNews, setBasketIncludeNews] = useState(false);
+  const [basketHolisticSummaryExpanded, setBasketHolisticSummaryExpanded] = useState(true);
 
   // Collapsible sections state
   const [holisticSummaryExpanded, setHolisticSummaryExpanded] = useState(true);
@@ -157,6 +159,9 @@ const App: React.FC = () => {
         tickers: tickerList,
         start_date: format(resolvedStart, 'yyyy-MM-dd'),
         end_date: format(resolvedEnd, 'yyyy-MM-dd'),
+        include_news: basketIncludeNews,
+        include_competitors: false,
+        include_macro: false,
       });
       setBasketAnalysis(data);
     } catch (err: unknown) {
@@ -326,6 +331,15 @@ const App: React.FC = () => {
                   </button>
                 )}
               </div>
+              <label className="flex items-center gap-2 px-3 py-2 bg-slate-100 rounded-lg cursor-pointer hover:bg-slate-200 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={basketIncludeNews}
+                  onChange={(e) => setBasketIncludeNews(e.target.checked)}
+                  className="w-4 h-4 text-indigo-600 rounded focus:ring-indigo-500"
+                />
+                <span className="text-sm text-slate-700 font-medium">Include News</span>
+              </label>
               <button
                 type="submit"
                 disabled={basketLoading}
@@ -507,6 +521,22 @@ const App: React.FC = () => {
 
             {basketAnalysis && (
               <div className="space-y-6">
+                {/* Holistic Summary */}
+                {basketAnalysis.holistic_summary && (
+                  <div id="basket-holistic-summary">
+                    <CollapsibleSection
+                      title="Basket Summary"
+                      icon={Info}
+                      expanded={basketHolisticSummaryExpanded}
+                      onToggle={() => setBasketHolisticSummaryExpanded(!basketHolisticSummaryExpanded)}
+                    >
+                      <div className="prose prose-slate max-w-none">
+                        <p className="text-slate-700 leading-relaxed whitespace-pre-wrap">{basketAnalysis.holistic_summary}</p>
+                      </div>
+                    </CollapsibleSection>
+                  </div>
+                )}
+
                 <div id="basket-performance" className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
                   <div className="flex items-center justify-between mb-6">
                     <div>
@@ -682,35 +712,63 @@ const NewsCardItem: React.FC<{ card: NewsCard }> = ({ card }) => {
 
 const BasketResultCard: React.FC<{ result: BasketTickerResult; rank: number }> = ({ result, rank }) => {
   const isUp = result.direction === 'up';
+  const [expanded, setExpanded] = useState(false);
+  const hasNews = result.news_cards && result.news_cards.length > 0;
   
   return (
-    <div className="bg-slate-50 rounded-xl p-4 flex items-center gap-4 hover:bg-slate-100 transition-colors">
-      <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 font-bold text-sm ${
-        rank <= 3 ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-600'
-      }`}>
-        {rank}
+    <div className="bg-slate-50 rounded-xl overflow-hidden hover:bg-slate-100 transition-colors">
+      <div 
+        className="p-4 flex items-center gap-4 cursor-pointer"
+        onClick={() => hasNews && setExpanded(!expanded)}
+      >
+        <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 font-bold text-sm ${
+          rank <= 3 ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-600'
+        }`}>
+          {rank}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="font-bold text-slate-900">{result.ticker}</span>
+            {result.company_name && (
+              <span className="text-sm text-slate-500 truncate">{result.company_name}</span>
+            )}
+            {hasNews && (
+              <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-medium">
+                {result.news_cards.length} news
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-3 text-sm">
+            <span className="text-slate-500">
+              ${result.start_price.toFixed(2)} → ${result.end_price.toFixed(2)}
+            </span>
+          </div>
+        </div>
+        <div className={`text-right shrink-0`}>
+          <div className={`text-xl font-bold ${isUp ? 'text-emerald-600' : 'text-rose-600'}`}>
+            {isUp ? '+' : ''}{result.total_change_pct.toFixed(1)}%
+          </div>
+          <div className={`text-xs font-bold uppercase ${isUp ? 'text-emerald-500' : 'text-rose-500'}`}>
+            {result.direction}
+          </div>
+        </div>
+        {hasNews && (
+          <div className={`p-2 rounded-full transition-transform ${expanded ? 'rotate-180 bg-slate-200' : 'text-slate-400'}`}>
+            <ChevronDown className="w-5 h-5" />
+          </div>
+        )}
       </div>
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 mb-1">
-          <span className="font-bold text-slate-900">{result.ticker}</span>
-          {result.company_name && (
-            <span className="text-sm text-slate-500 truncate">{result.company_name}</span>
-          )}
+
+      {expanded && hasNews && (
+        <div className="px-4 pb-4 border-t border-slate-200 pt-4">
+          <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-3">Related News</h4>
+          <div className="grid grid-cols-1 gap-3">
+            {result.news_cards.map((card, j) => (
+              <NewsCardItem key={j} card={card} />
+            ))}
+          </div>
         </div>
-        <div className="flex items-center gap-3 text-sm">
-          <span className="text-slate-500">
-            ${result.start_price.toFixed(2)} → ${result.end_price.toFixed(2)}
-          </span>
-        </div>
-      </div>
-      <div className={`text-right shrink-0`}>
-        <div className={`text-xl font-bold ${isUp ? 'text-emerald-600' : 'text-rose-600'}`}>
-          {isUp ? '+' : ''}{result.total_change_pct.toFixed(1)}%
-        </div>
-        <div className={`text-xs font-bold uppercase ${isUp ? 'text-emerald-500' : 'text-rose-500'}`}>
-          {result.direction}
-        </div>
-      </div>
+      )}
     </div>
   );
 };
