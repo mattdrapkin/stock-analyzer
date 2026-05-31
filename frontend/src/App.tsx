@@ -339,6 +339,7 @@ const formatBasketSummary = (text: string, validTickers: string[]): React.ReactN
 
     const ticker = match[1];
     const percentage = match[2];
+    const matchedText = match[0];
 
     // Only highlight if it's a valid ticker in the basket
     if (validTickers.includes(ticker)) {
@@ -348,10 +349,13 @@ const formatBasketSummary = (text: string, validTickers: string[]): React.ReactN
         // Handle NaN case
         if (!isNaN(pctValue)) {
           const colorClass = pctValue >= 0 ? 'text-emerald-600 font-bold' : 'text-rose-600 font-bold';
+          // Check if there's trailing whitespace in the matched text
+          const trailingSpace = matchedText.match(/\s+$/);
           parts.push(
             <span key={match.index}>
               <span className="font-bold">{ticker}</span>
               <span className={colorClass}> ({percentage}%)</span>
+              {trailingSpace && <span>{trailingSpace[0]}</span>}
             </span>
           );
         } else {
@@ -362,10 +366,10 @@ const formatBasketSummary = (text: string, validTickers: string[]): React.ReactN
       }
     } else {
       // Not a valid ticker, just add the matched text as-is
-      parts.push(match[0]);
+      parts.push(matchedText);
     }
 
-    lastIndex = match.index + match[0].length;
+    lastIndex = match.index + matchedText.length;
   }
 
   // Add remaining text
@@ -395,18 +399,22 @@ const formatBasketSummary = (text: string, validTickers: string[]): React.ReactN
         }
 
         const pctValue = parseFloat(pctMatch[1]);
+        const matchedPct = pctMatch[0];
         if (!isNaN(pctValue)) {
           const colorClass = pctValue >= 0 ? 'text-emerald-600 font-bold' : 'text-rose-600 font-bold';
+          // Check if there's trailing whitespace in the matched text
+          const trailingSpace = matchedPct.match(/\s+$/);
           subParts.push(
             <span key={`pct-${partIndex}-${pctMatch.index}`} className={colorClass}>
-              {pctMatch[0]}
+              {matchedPct.replace(/\s+$/, '')}
+              {trailingSpace && <span>{trailingSpace[0]}</span>}
             </span>
           );
         } else {
-          subParts.push(pctMatch[0]);
+          subParts.push(matchedPct);
         }
 
-        subLastIndex = pctMatch.index + pctMatch[0].length;
+        subLastIndex = pctMatch.index + matchedPct.length;
       }
 
       // Add remaining text
@@ -776,25 +784,10 @@ const App: React.FC = () => {
 
   const handleDownloadPdf = async () => {
     if (!analysis) return;
-    
+
     setDownloadingPdf(true);
     try {
-      const params: {
-        start_date?: string;
-        end_date?: string;
-        min_movement_pct?: number;
-      } = {
-        min_movement_pct: minMovementThreshold
-      };
-      
-      if (startDate) {
-        params.start_date = format(startDate, 'yyyy-MM-dd');
-      }
-      if (endDate) {
-        params.end_date = format(endDate, 'yyyy-MM-dd');
-      }
-      
-      await stockApi.downloadAnalysisPdf(analysis.ticker, params);
+      await stockApi.downloadAnalysisPdfFromData(analysis);
     } catch (err) {
       console.error('PDF download error:', err);
       if (err && typeof err === 'object' && 'rateLimitInfo' in err) {
@@ -812,22 +805,10 @@ const App: React.FC = () => {
 
   const handleDownloadBasketPdf = async () => {
     if (!basketAnalysis) return;
-    
+
     setDownloadingPdf(true);
     try {
-      const resolvedEnd = basketEndDate || new Date();
-      const resolvedStart = basketStartDate || new Date(new Date().setMonth(resolvedEnd.getMonth() - 3));
-      
-      await stockApi.downloadBasketPdf({
-        tickers: basketAnalysis.tickers,
-        start_date: format(resolvedStart, 'yyyy-MM-dd'),
-        end_date: format(resolvedEnd, 'yyyy-MM-dd'),
-        include_news: true,
-        include_competitors: false,
-        include_macro: false,
-        basket_id: selectedBasket || undefined,
-        basket_name: selectedBasket ? DEFAULT_BASKETS.find(b => b.id === selectedBasket)?.name : undefined,
-      });
+      await stockApi.downloadBasketPdfFromData(basketAnalysis);
     } catch (err) {
       console.error('Basket PDF download error:', err);
       if (err && typeof err === 'object' && 'rateLimitInfo' in err) {

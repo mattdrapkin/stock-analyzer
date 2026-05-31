@@ -319,12 +319,12 @@ export const stockApi = {
         params,
         responseType: 'blob',
       });
-      
+
       // Create download link
       const url = window.URL.createObjectURL(new Blob([response.data]));
       const link = document.createElement('a');
       link.href = url;
-      
+
       // Extract filename from Content-Disposition header if available
       const contentDisposition = response.headers['content-disposition'];
       let filename = `${ticker}_analysis.pdf`;
@@ -334,7 +334,52 @@ export const stockApi = {
           filename = filenameMatch[1].replace(/['"]/g, '');
         }
       }
-      
+
+      link.setAttribute('download', filename);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (error: unknown) {
+      if (error && typeof error === 'object' && 'response' in error) {
+        const err = error as { response?: { status?: number; data?: { detail?: string } } };
+        if (err.response?.status === 429) {
+          const message = err.response.data?.detail || 'Rate limit reached. Please wait a moment before trying again.';
+          const rateLimitInfo = parseRateLimitError(message);
+          const enhancedError = new Error(message, { cause: error }) as RateLimitError;
+          enhancedError.rateLimitInfo = rateLimitInfo;
+          throw enhancedError;
+        }
+      }
+      throw error;
+    }
+  },
+
+  downloadAnalysisPdfFromData: async (analysis: TickerAnalysis, params?: {
+    include_competitors?: boolean;
+    include_macro?: boolean;
+  }) => {
+    try {
+      const response = await api.post('/analysis/pdf/from-data', analysis, {
+        params,
+        responseType: 'blob',
+      });
+
+      // Create download link
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+
+      // Extract filename from Content-Disposition header if available
+      const contentDisposition = response.headers['content-disposition'];
+      let filename = `${analysis.ticker}_analysis.pdf`;
+      if (contentDisposition) {
+        const filenameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+        if (filenameMatch && filenameMatch[1]) {
+          filename = filenameMatch[1].replace(/['"]/g, '');
+        }
+      }
+
       link.setAttribute('download', filename);
       document.body.appendChild(link);
       link.click();
@@ -375,12 +420,12 @@ export const stockApi = {
         },
         responseType: 'blob',
       });
-      
+
       // Create download link
       const url = window.URL.createObjectURL(new Blob([response.data]));
       const link = document.createElement('a');
       link.href = url;
-      
+
       // Extract filename from Content-Disposition header if available
       const contentDisposition = response.headers['content-disposition'];
       let filename = 'basket_analysis.pdf';
@@ -390,7 +435,52 @@ export const stockApi = {
           filename = filenameMatch[1].replace(/['"]/g, '');
         }
       }
-      
+
+      link.setAttribute('download', filename);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (error: unknown) {
+      if (error && typeof error === 'object' && 'response' in error) {
+        const err = error as { response?: { status?: number; data?: { detail?: string } } };
+        if (err.response?.status === 429) {
+          const message = err.response.data?.detail || 'Rate limit reached. Please wait a moment before trying again.';
+          const rateLimitInfo = parseRateLimitError(message);
+          const enhancedError = new Error(message, { cause: error }) as RateLimitError;
+          enhancedError.rateLimitInfo = rateLimitInfo;
+          throw enhancedError;
+        }
+      }
+      throw error;
+    }
+  },
+
+  downloadBasketPdfFromData: async (basketAnalysis: BasketAnalysisResponse, params?: {
+    include_competitors?: boolean;
+    include_macro?: boolean;
+  }) => {
+    try {
+      const response = await api.post('/basket/pdf/from-data', basketAnalysis, {
+        params,
+        responseType: 'blob',
+      });
+
+      // Create download link
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+
+      // Extract filename from Content-Disposition header if available
+      const contentDisposition = response.headers['content-disposition'];
+      let filename = 'basket_analysis.pdf';
+      if (contentDisposition) {
+        const filenameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+        if (filenameMatch && filenameMatch[1]) {
+          filename = filenameMatch[1].replace(/['"]/g, '');
+        }
+      }
+
       link.setAttribute('download', filename);
       document.body.appendChild(link);
       link.click();

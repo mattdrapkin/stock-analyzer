@@ -702,3 +702,112 @@ def download_basket_pdf(
     except Exception as e:
         logger.exception(f"Unexpected error generating basket PDF")
         raise HTTPException(status_code=500, detail=f"Internal error: {e}")
+
+
+@app.post(
+    "/api/v1/analysis/pdf/from-data",
+    tags=["Analysis"],
+    summary="Download stock analysis as PDF from pre-computed data",
+)
+def download_analysis_pdf_from_data(
+    analysis: TickerAnalysis,
+    include_competitors: bool = Query(
+        default=False,
+        description="Whether competitors were included in the original analysis.",
+    ),
+    include_macro: bool = Query(
+        default=False,
+        description="Whether macro news was included in the original analysis.",
+    ),
+) -> Response:
+    """
+    Generate and download a PDF report from pre-computed TickerAnalysis data.
+    
+    This endpoint accepts the analysis data directly without re-running the analysis,
+    avoiding unnecessary API calls and data fetching.
+    
+    The PDF includes:
+    - Report generation timestamp
+    - Company information
+    - Analysis parameters (date range, threshold, etc.)
+    - Summary statistics
+    - Significant price movements table
+    - News highlights
+    
+    Returns a PDF file with the analysis results.
+    """
+    try:
+        params = {
+            'include_competitors': include_competitors,
+            'include_macro': include_macro,
+        }
+        
+        pdf_content = generate_analysis_pdf(analysis, params)
+        
+        return Response(
+            content=pdf_content,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f"attachment; filename={analysis.ticker}_analysis_{analysis.period_start}_to_{analysis.period_end}.pdf"
+            }
+        )
+    except Exception as e:
+        logger.exception(f"Unexpected error generating PDF from data for {analysis.ticker}")
+        raise HTTPException(status_code=500, detail=f"Internal error: {e}")
+
+
+@app.post(
+    "/api/v1/basket/pdf/from-data",
+    tags=["Basket"],
+    summary="Download basket analysis as PDF from pre-computed data",
+)
+def download_basket_pdf_from_data(
+    basket_response: BasketAnalysisResponse,
+    include_competitors: bool = Query(
+        default=False,
+        description="Whether competitors were included in the original analysis.",
+    ),
+    include_macro: bool = Query(
+        default=False,
+        description="Whether macro news was included in the original analysis.",
+    ),
+) -> Response:
+    """
+    Generate and download a PDF report from pre-computed BasketAnalysisResponse data.
+    
+    This endpoint accepts the basket analysis data directly without re-running the analysis,
+    avoiding unnecessary API calls and data fetching.
+    
+    The PDF includes:
+    - Report generation timestamp
+    - Analysis parameters (date range, tickers, etc.)
+    - Summary statistics
+    - Basket performance table with all tickers
+    - Holistic summary (if available)
+    - News highlights by ticker (if news was fetched)
+    
+    Returns a PDF file with the basket analysis results.
+    """
+    try:
+        params = {
+            'include_competitors': include_competitors,
+            'include_macro': include_macro,
+        }
+        
+        pdf_content = generate_basket_pdf(basket_response, params)
+        
+        # Create filename from tickers
+        ticker_str = "_".join(basket_response.tickers[:5])
+        if len(basket_response.tickers) > 5:
+            ticker_str += f"_and_{len(basket_response.tickers) - 5}_more"
+        
+        return Response(
+            content=pdf_content,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f"attachment; filename=basket_{ticker_str}_{basket_response.period_start}_to_{basket_response.period_end}.pdf"
+            }
+        )
+    except Exception as e:
+        logger.exception(f"Unexpected error generating basket PDF from data")
+        raise HTTPException(status_code=500, detail=f"Internal error: {e}")
