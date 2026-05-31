@@ -2,20 +2,15 @@
 Fun Facts module: generates interesting facts about stocks or baskets using OpenAI.
 """
 
-import os
 import logging
-from typing import List, Optional
+from typing import List
 
-from openai import OpenAI, OpenAIError
+from openai import OpenAIError
 
 from .models import FunFactsRequest, FunFactsResponse
-from .news_fetcher import has_openai_key
-from .rate_limit_utils import is_rate_limit_error, create_rate_limit_error, RateLimitError, get_rate_limiter
+from .openai_client import RateLimitError, call_chat_completions, has_openai_key
 
 logger = logging.getLogger(__name__)
-
-OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 
 FUN_FACTS_SYSTEM_PROMPT = """You are a sophisticated institutional investor with deep knowledge of public and private markets, having worked at top-tier endowments, hedge funds, and venture capital firms.
@@ -77,21 +72,13 @@ def generate_fun_facts(request: FunFactsRequest) -> FunFactsResponse:
     logger.info(f"User prompt: {user_prompt}")
 
     try:
-        # Apply rate limiting before making the API call
-        rate_limiter = get_rate_limiter()
-        rate_limiter.wait_if_needed()
-        
-        client = OpenAI(api_key=OPENAI_API_KEY)
-        completion = client.chat.completions.create(
-            model=OPENAI_MODEL,
+        response_text = call_chat_completions(
             messages=[
                 {"role": "system", "content": FUN_FACTS_SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
-            temperature=0.7,  # Slightly higher temperature for more variety
+            temperature=0.7,
         )
-        
-        response_text = completion.choices[0].message.content or ""
         logger.info(f"Fun facts generated successfully: {response_text[:200]}...")
 
         # Parse the numbered list into individual facts
@@ -99,24 +86,20 @@ def generate_fun_facts(request: FunFactsRequest) -> FunFactsResponse:
         for line in response_text.strip().split('\n'):
             line = line.strip()
             if line:
-                # Remove numbering (e.g., "1. " or "1) ")
                 if line[0].isdigit():
                     parts = line.split('.', 1) if '.' in line else line.split(')', 1)
                     if len(parts) > 1:
                         line = parts[1].strip()
                 facts.append(line)
 
-        # Ensure we have at least some facts
         if not facts:
             facts = [response_text]
 
         logger.info(f"Parsed {len(facts)} facts")
-        return FunFactsResponse(facts=facts[:8])  # Limit to 8 facts max
+        return FunFactsResponse(facts=facts[:8])
 
+    except RateLimitError:
+        raise
     except OpenAIError as e:
-        if is_rate_limit_error(e):
-            logger.warning(f"Rate limit hit in fun facts: {e}")
-            raise create_rate_limit_error(e) from e
-        else:
-            logger.error(f"OpenAI API error in fun facts: {e}")
-            raise
+        logger.error(f"OpenAI API error in fun facts: {e}")
+        raise

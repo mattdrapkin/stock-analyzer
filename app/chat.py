@@ -6,22 +6,17 @@ If OPENAI_API_KEY is not set the module returns a structured text summary
 instead of an LLM response so the endpoint remains usable without a key.
 """
 
-import os
 import logging
 from datetime import date, timedelta
 from typing import List, Optional
 
-from openai import OpenAI, OpenAIError
+from openai import OpenAIError
 
 from .models import ChatMessage, ChatResponse, TickerAnalysis
 from .analyzer import build_analysis
-from .news_fetcher import has_openai_key
-from .rate_limit_utils import RateLimitError, is_rate_limit_error, create_rate_limit_error, get_rate_limiter
+from .openai_client import RateLimitError, call_chat_completions, has_openai_key
 
 logger = logging.getLogger(__name__)
-
-OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-5.4-nano")
 
 
 # ── Context builder ───────────────────────────────────────────────────────────
@@ -225,31 +220,18 @@ def chat_with_ticker(
     messages.append({"role": "user", "content": message})
     
     try:
-        # Apply rate limiting before making the API call
-        rate_limiter = get_rate_limiter()
-        rate_limiter.wait_if_needed()
-        
-        client = OpenAI(api_key=OPENAI_API_KEY)
-        completion = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=messages,
-            temperature=0.3,
-        )
-        logger.debug("COMPLETION: %s", completion.choices)
-        response_text = completion.choices[0].message.content or ""
+        response_text = call_chat_completions(messages=messages, temperature=0.3)
         logger.debug("RESPONSE: %s", response_text)
+    except RateLimitError as e:
+        logger.warning(f"Rate limit hit in chat: {e}")
+        response_text = str(e) + "\n\n" + context_block
     except OpenAIError as e:
-        if is_rate_limit_error(e):
-            logger.warning(f"Rate limit hit in chat: {e}")
-            rate_limit_err = create_rate_limit_error(e)
-            response_text = str(rate_limit_err) + "\n\n" + context_block
-        else:
-            logger.error(f"OpenAI API error: {e}")
-            response_text = (
-                f"OpenAI API error: {e}\n\n"
-                "Falling back to raw data:\n\n"
-                + context_block
-            )
+        logger.error(f"OpenAI API error: {e}")
+        response_text = (
+            f"OpenAI API error: {e}\n\n"
+            "Falling back to raw data:\n\n"
+            + context_block
+        )
 
     return ChatResponse(
         response=response_text,

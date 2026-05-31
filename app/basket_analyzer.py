@@ -2,27 +2,32 @@
 Basket Analysis: Compare multiple securities to find the biggest movers over a period.
 """
 
+import json
 import logging
 import os
-import json
-import re
-from datetime import date, datetime
-from typing import List, Dict, Optional
-import pandas as pd
+from datetime import date
+from typing import Dict, List, Optional
 
-from openai import OpenAI, OpenAIError
+import pandas as pd
+from openai import OpenAIError
 
 from .models import BasketAnalysisResponse, BasketTickerResult, NewsCard
+from .news_parsing import (
+    news_card_from_dict,
+    parse_article_dict,
+    strip_markdown_fences,
+    strip_markdown_formatting,
+)
+from .openai_client import (
+    OPENAI_API_KEY,
+    RateLimitError,
+    call_chat_completions,
+    call_responses_api,
+    has_openai_key,
+)
 from .stock_data import fetch_price_history, get_ticker_info
-from .news_fetcher import fetch_batch_news_for_period, has_openai_key, RateLimitError, _extract_from_response
-from .rate_limit_utils import is_rate_limit_error, create_rate_limit_error, get_rate_limiter, retry_with_exponential_backoff
 
 logger = logging.getLogger(__name__)
-
-OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-OPENAI_SEARCH_MODEL: str = os.getenv("OPENAI_SEARCH_MODEL", "gpt-5.5")
-OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-5.4-nano")
-OPENAI_SEARCH_CONTEXT_SIZE: str = os.getenv("OPENAI_SEARCH_CONTEXT_SIZE", "medium")
 
 # Configurable limit for news fetching on biggest movers
 BASKET_NEWS_TOP_N: int = int(os.getenv("BASKET_NEWS_TOP_N", "10"))
@@ -38,40 +43,24 @@ Rules: Find news for 50%+ of tickers. 2-3 articles per ticker. category must be 
 
 def _parse_basket_news_cards_from_response(content: str) -> Dict[str, List[Dict]]:
     """Parse structured news cards from an OpenAI JSON response for basket."""
-    import re
-    
     if not content:
         return {}
 
-    text = content.strip()
-    # Strip markdown code fences if the model wrapped the JSON
-    if text.startswith("```"):
-        text = re.sub(r'^```(?:json)?\n?', '', text)
-        text = re.sub(r'\n?```$', '', text)
-        text = text.strip()
+    text = strip_markdown_fences(content)
 
-    # First, try to fix truncated JSON by closing incomplete structures
-    # Count braces and brackets to determine what's missing
+    # Repair truncated JSON by closing any unclosed brackets/braces/strings
     open_braces = text.count('{')
     close_braces = text.count('}')
     open_brackets = text.count('[')
     close_brackets = text.count(']')
-    
-    # Add missing closing brackets and braces
     text += ']' * (open_brackets - close_brackets)
     text += '}' * (open_braces - close_braces)
-    
-    # Also handle case where a string is left open (truncated mid-string)
-    # Find the last quote and check if it's properly closed
     if text.count('"') % 2 != 0:
-        # Odd number of quotes means a string is unclosed
-        # Add a closing quote
         text += '"'
-    
-    # Try to extract valid JSON by progressively truncating from the end
-    # This handles cases where OpenAI truncates the response mid-JSON
+
+    # Progressively truncate from the end until valid JSON is found
     original_length = len(text)
-    for i in range(min(original_length, 1000)):  # Increased limit for longer responses
+    for i in range(min(original_length, 1000)):
         try:
             data = json.loads(text)
             ticker_news = data.get("ticker_news", {})
@@ -82,59 +71,32 @@ def _parse_basket_news_cards_from_response(content: str) -> Dict[str, List[Dict]
             for ticker, articles in ticker_news.items():
                 if not isinstance(articles, list):
                     continue
-                
-                validated_articles = []
-                for article in articles:
-                    if not isinstance(article, dict):
-                        continue
-                    
-                    title = (article.get("title") or "").strip()
-                    summary = (article.get("summary") or "").strip()
-                    if not title or not summary:
-                        continue
+                validated[ticker] = [
+                    parsed
+                    for article in articles
+                    if (parsed := parse_article_dict(article)) is not None
+                ]
 
-                    cat = article.get("category", "company")
-                    if cat not in ("company", "competitor", "macro"):
-                        cat = "company"
-
-                    url = article.get("url") or None
-                    if url and not url.startswith("http"):
-                        url = None
-
-                    # Normalize date to YYYY-MM-DD format
-                    date_str = article.get("date")
-                    if date_str:
-                        try:
-                            parsed_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-                            date_str = parsed_date.isoformat()
-                        except ValueError:
-                            date_str = None
-
-                    validated_articles.append({
-                        "title": title,
-                        "summary": summary,
-                        "date": date_str,
-                        "source_name": (article.get("source_name") or "").strip() or None,
-                        "url": url,
-                        "category": cat,
-                        "relevance": (article.get("relevance") or "").strip() or None,
-                    })
-                
-                validated[ticker] = validated_articles
-            logger.info(f"Successfully parsed basket news after truncating {original_length - len(text)} characters")
+            logger.info(
+                "Successfully parsed basket news after truncating %d characters",
+                original_length - len(text),
+            )
             return validated
-        except json.JSONDecodeError as e:
-            # Remove last character and try again
+        except json.JSONDecodeError:
             text = text[:-1]
             if not text:
-                logger.warning(f"Failed to parse structured basket news cards from OpenAI response: text became empty after {i} attempts")
+                logger.warning(
+                    "Failed to parse basket news: text became empty after %d attempts", i
+                )
                 return {}
         except (KeyError, TypeError) as e:
-            logger.warning(f"Failed to process structured basket news cards from OpenAI response after JSON parsing: {e}")
-            logger.debug(f"Response content that caused processing error: {text[:500]}")
+            logger.warning("Failed to process basket news after JSON parsing: %s", e)
+            logger.debug("Response content that caused processing error: %s", text[:500])
             return {}
 
-    logger.warning(f"Failed to parse structured basket news cards from OpenAI response after {min(original_length, 1000)} attempts")
+    logger.warning(
+        "Failed to parse basket news after %d attempts", min(original_length, 1000)
+    )
     return {}
 
 
@@ -168,9 +130,6 @@ def fetch_basket_news_batch(
         return {}
 
     try:
-        client = OpenAI(api_key=OPENAI_API_KEY)
-
-        # Build prompt with all tickers
         ticker_list = [f"{info['ticker']} ({info['company_name']})" for info in ticker_info]
         ticker_str = ", ".join(ticker_list)
 
@@ -181,10 +140,12 @@ def fetch_basket_news_batch(
             categories.append("macro")
         categories_str = ", ".join(categories)
 
-        # Add priority context if these are the biggest movers
         priority_context = ""
         if prioritize:
-            priority_context = "These are the biggest winners and losers in the basket. PRIORITIZE finding news for these tickers as they are the most significant movers. "
+            priority_context = (
+                "These are the biggest winners and losers in the basket. "
+                "PRIORITIZE finding news for these tickers as they are the most significant movers. "
+            )
 
         prompt = (
             f"News for {ticker_str} "
@@ -194,67 +155,24 @@ def fetch_basket_news_batch(
             f"2-3 articles per ticker. 50%+ coverage."
         )
 
-        # Use exponential backoff retry with rate limiting
-        rate_limiter = get_rate_limiter()
-        
-        def make_api_call():
-            # Use Responses API with web_search tool
-            result = client.responses.create(
-                model=OPENAI_SEARCH_MODEL,
-                instructions=BASKET_NEWS_SYSTEM_PROMPT,
-                input=prompt,
-                tools=[{"type": "web_search", "search_context_size": OPENAI_SEARCH_CONTEXT_SIZE}],
-                tool_choice="required",  # Require web search for news fetching
-            )
-            return result
-
-        try:
-            response = retry_with_exponential_backoff(
-                make_api_call,
-                max_retries=5,
-                initial_delay=1.0,
-                max_delay=60.0,
-                rate_limiter=rate_limiter,
-            )
-        except Exception as e:
-            logger.error(f"Error during API call: {e}")
-            raise
-
-        content, _, _ = _extract_from_response(response)
+        content, _, _ = call_responses_api(
+            instructions=BASKET_NEWS_SYSTEM_PROMPT,
+            prompt=prompt,
+        )
         logger.debug(f"Basket news response length: {len(content)}")
         raw_news_dict = _parse_basket_news_cards_from_response(content)
-        
-        # Convert to NewsCard objects
-        from .models import NewsCategory
-        result: Dict[str, List[NewsCard]] = {}
-        
-        for ticker, raw_cards in raw_news_dict.items():
-            news_cards = []
-            for card in raw_cards:
-                cat_str = card.get("category", "company")
-                try:
-                    cat = NewsCategory(cat_str)
-                except ValueError:
-                    cat = NewsCategory.COMPANY
-                
-                news_cards.append(NewsCard(
-                    title=card.get("title", ""),
-                    summary=card.get("summary", ""),
-                    date=card.get("date") or None,
-                    source_name=card.get("source_name") or None,
-                    url=card.get("url") or None,
-                    category=cat,
-                    relevance=card.get("relevance") or None,
-                ))
-            result[ticker] = news_cards
-        
+
+        result: Dict[str, List[NewsCard]] = {
+            ticker: [news_card_from_dict(card) for card in raw_cards]
+            for ticker, raw_cards in raw_news_dict.items()
+        }
+
         logger.debug(f"Batch news fetch returned news for {len(result)} tickers")
         return result
 
+    except RateLimitError:
+        raise
     except OpenAIError as e:
-        if is_rate_limit_error(e):
-            logger.warning(f"Rate limit hit in batch basket news fetch: {e}")
-            raise create_rate_limit_error(e) from e
         logger.error(f"OpenAI batch basket news fetch failed: {e}")
         return {}
     except Exception as e:
@@ -360,43 +278,25 @@ IMPORTANT: This is a web application interface, not a conversational chat. Never
 """
     
     try:
-        client = OpenAI(api_key=OPENAI_API_KEY)
-        
-        # Use exponential backoff retry with rate limiting
-        rate_limiter = get_rate_limiter()
-        
-        def make_api_call():
-            return client.chat.completions.create(
-                model=OPENAI_MODEL,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are an expert financial analyst. Provide concise, insightful summaries of basket performance based on news and price data. IMPORTANT: This is a web application interface, not a conversational chat. Never offer follow-up actions, suggest what the user can do next, or ask if they want additional information. Provide a complete, self-contained response."
-                    },
-                    {
-                        "role": "user",
-                        "content": context
-                    }
-                ],
-                temperature=0.3,
-            )
-
-        completion = retry_with_exponential_backoff(
-            make_api_call,
-            max_retries=5,
-            initial_delay=1.0,
-            max_delay=60.0,
-            rate_limiter=rate_limiter,
+        summary = call_chat_completions(
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an expert financial analyst. Provide concise, insightful summaries "
+                        "of basket performance based on news and price data. "
+                        "IMPORTANT: This is a web application interface, not a conversational chat. "
+                        "Never offer follow-up actions, suggest what the user can do next, or ask if "
+                        "they want additional information. Provide a complete, self-contained response."
+                    ),
+                },
+                {"role": "user", "content": context},
+            ],
+            temperature=0.3,
         )
-        
-        summary = completion.choices[0].message.content or ""
-        # Strip markdown formatting (bold, italic, etc.) using a single comprehensive regex
-        # Match **bold**, __bold__, *italic*, _italic_ in any order
-        summary = re.sub(r'(\*\*|__)(.*?)\1', r'\2', summary)  # Remove bold (**text** or __text__)
-        summary = re.sub(r'(\*|_)(?!\1)(.*?)\1', r'\2', summary)  # Remove italic (*text* or _text_) but not bold
+        summary = strip_markdown_formatting(summary)
         logger.debug(f"Generated basket holistic summary: {summary[:100]}...")
         return summary
-        
     except OpenAIError as e:
         logger.warning(f"OpenAI API error generating basket holistic summary: {e}")
         return None

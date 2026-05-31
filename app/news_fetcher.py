@@ -11,26 +11,29 @@ News categories
 - macro      (hard)  : Fed, rates, inflation, geopolitical events
 """
 
-import os
 import json
 import logging
-import re
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from typing import List, Dict, Optional, Tuple
 
-from openai import OpenAI, OpenAIError
+from openai import OpenAIError
 
-from .rate_limit_utils import RateLimitError, is_rate_limit_error, create_rate_limit_error, get_rate_limiter, retry_with_exponential_backoff
+from .openai_client import (
+    OPENAI_API_KEY,
+    RateLimitError,
+    call_responses_api,
+    has_openai_key,
+)
+from .news_parsing import parse_article_dict, strip_markdown_fences
 
 logger = logging.getLogger(__name__)
-
-OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-OPENAI_SEARCH_MODEL: str = os.getenv("OPENAI_SEARCH_MODEL", "gpt-5.5")
-OPENAI_SEARCH_CONTEXT_SIZE: str = os.getenv("OPENAI_SEARCH_CONTEXT_SIZE", "medium")
 
 # How many days before / after a movement to search for news
 DEFAULT_DAYS_BEFORE = 2
 DEFAULT_DAYS_AFTER = 1
+
+# Re-export RateLimitError so existing importers don't break
+__all__ = ["RateLimitError", "has_openai_key"]
 
 
 # ── Structured JSON prompt ────────────────────────────────────────────────────
@@ -71,15 +74,7 @@ def _parse_news_cards_from_response(content: str) -> List[Dict]:
     if not content:
         return []
 
-    text = content.strip()
-    # Strip markdown code fences if the model wrapped the JSON
-    if text.startswith("```"):
-        text = re.sub(r'^```(?:json)?\n?', '', text)
-        text = re.sub(r'\n?```$', '', text)
-        text = text.strip()
-
-    # Store original content for error logging
-    response_content = text
+    text = strip_markdown_fences(content)
 
     try:
         data = json.loads(text)
@@ -89,62 +84,13 @@ def _parse_news_cards_from_response(content: str) -> List[Dict]:
 
         validated: List[Dict] = []
         for article in articles:
-            if not isinstance(article, dict):
-                continue
-            title = (article.get("title") or "").strip()
-            summary = (article.get("summary") or "").strip()
-            if not title or not summary:
-                logger.debug(f"Skipping article with missing title or summary: {article}")
-                continue
-
-            cat = article.get("category", "company")
-            if cat not in ("company", "competitor", "macro"):
-                cat = "company"
-
-            url = article.get("url") or None
-            if url and not url.startswith("http"):
-                url = None
-
-            # Normalize date to YYYY-MM-DD format
-            date_str = article.get("date")
-            if date_str:
-                parsed_date_str = date_str
-                try:
-                    # Try YYYY-MM-DD format first
-                    parsed_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-                    parsed_date_str = parsed_date.isoformat()
-                except ValueError:
-                    try:
-                        # Try other common formats
-                        for fmt in ("%B %d, %Y", "%d %B %Y", "%m/%d/%Y", "%Y/%m/%d"):
-                            try:
-                                parsed_date = datetime.strptime(date_str, fmt).date()
-                                parsed_date_str = parsed_date.isoformat()
-                                break
-                            except ValueError:
-                                continue
-                        else:
-                            # All formats failed
-                            logger.debug(f"Could not parse date '{date_str}', setting to None")
-                            parsed_date_str = None
-                    except Exception:
-                        logger.debug(f"Error parsing date '{date_str}', setting to None")
-                        parsed_date_str = None
-                date_str = parsed_date_str
-
-            validated.append({
-                "title": title,
-                "summary": summary,
-                "date": date_str,
-                "source_name": (article.get("source_name") or "").strip() or None,
-                "url": url,
-                "category": cat,
-                "relevance": (article.get("relevance") or "").strip() or None,
-            })
+            parsed = parse_article_dict(article)
+            if parsed is not None:
+                validated.append(parsed)
         return validated
     except (json.JSONDecodeError, KeyError, TypeError) as e:
         logger.warning(f"Failed to parse structured news cards from OpenAI response: {e}")
-        logger.debug(f"Response content that failed parsing: {response_content[:500] if 'response_content' in locals() else 'N/A'}")
+        logger.debug(f"Response content that failed parsing: {text[:500]}")
         return []
 
 
@@ -202,53 +148,6 @@ def _build_macro_search_prompt(
     )
 
 
-# ── Responses API output parsing ─────────────────────────────────────────────
-
-def _extract_from_response(response) -> Tuple[str, List[str], List[str]]:
-    """
-    Parse a Responses API response object.
-
-    The output list contains two item types (per API docs):
-      - web_search_call  → exposes the search query via action.query
-      - message          → contains assistant text (output_text) and
-                           url_citation annotations
-
-    Returns:
-        Tuple of (text, source_urls, search_queries)
-    """
-    text = ""
-    source_urls: List[str] = []
-    search_queries: List[str] = []
-
-    if not hasattr(response, "output") or not response.output:
-        return text, source_urls, search_queries
-
-    for item in response.output:
-        item_type = getattr(item, "type", None)
-
-        if item_type == "web_search_call":
-            action = getattr(item, "action", None)
-            if action:
-                query = getattr(action, "query", None)
-                if query:
-                    search_queries.append(query)
-
-        elif item_type == "message":
-            content_list = getattr(item, "content", None) or []
-            for block in content_list:
-                if getattr(block, "type", None) == "output_text":
-                    text = getattr(block, "text", "") or ""
-                    for ann in (getattr(block, "annotations", None) or []):
-                        if getattr(ann, "type", None) == "url_citation":
-                            url = getattr(ann, "url", None)
-                            if url:
-                                source_urls.append(url)
-
-    source_urls = list(dict.fromkeys(source_urls))      # deduplicate, preserve order
-    search_queries = list(dict.fromkeys(search_queries))
-    return text, source_urls, search_queries
-
-
 # ── OpenAI Responses API web search ───────────────────────────────────────────
 
 def _batch_search_with_openai(
@@ -271,8 +170,6 @@ def _batch_search_with_openai(
         return []
 
     try:
-        client = OpenAI(api_key=OPENAI_API_KEY)
-
         categories = [
             "company-specific events (earnings, product launches, executive changes, "
             "lawsuits, regulatory actions, analyst upgrades/downgrades)"
@@ -288,9 +185,8 @@ def _batch_search_with_openai(
                 "inflation data, GDP reports, geopolitical events)"
             )
 
-        categories_str = "; ".join(categories)
+        categories_str = ";".join(categories)
 
-        # Build prompt with priority dates
         prompt_parts = [
             f"Find the most impactful news articles about {company_name} ({ticker}) "
             f"published between {from_date.isoformat()} and {to_date.isoformat()}. "
@@ -307,37 +203,17 @@ def _batch_search_with_openai(
 
         prompt = " ".join(prompt_parts)
 
-        # Use exponential backoff retry with rate limiting
-        rate_limiter = get_rate_limiter()
-        
-        def make_api_call():
-            # Use Responses API with web_search tool
-            result = client.responses.create(
-                model=OPENAI_SEARCH_MODEL,
-                instructions=STRUCTURED_NEWS_SYSTEM_PROMPT,
-                input=prompt,
-                tools=[{"type": "web_search", "search_context_size": OPENAI_SEARCH_CONTEXT_SIZE}],
-                tool_choice="required",  # Require web search for news fetching
-            )
-            return result
-
-        response = retry_with_exponential_backoff(
-            make_api_call,
-            max_retries=5,
-            initial_delay=1.0,
-            max_delay=60.0,
-            rate_limiter=rate_limiter,
+        content, _, _ = call_responses_api(
+            instructions=STRUCTURED_NEWS_SYSTEM_PROMPT,
+            prompt=prompt,
         )
-
-        content, _, _ = _extract_from_response(response)
         cards = _parse_news_cards_from_response(content)
         logger.debug(f"Structured batch search returned {len(cards)} news cards for {ticker}")
         return cards
 
+    except RateLimitError:
+        raise
     except OpenAIError as e:
-        if is_rate_limit_error(e):
-            logger.warning(f"Rate limit hit in batch web search: {e}")
-            raise create_rate_limit_error(e) from e
         logger.error(f"OpenAI batch web search failed: {e}")
         return []
     except Exception as e:
@@ -351,7 +227,7 @@ def _search_with_openai(
 ) -> Tuple[str, List[str], List[str]]:
     """
     Use OpenAI Responses API with web_search tool to find news.
-    
+
     Returns:
         Tuple of (ai_summary, sources, search_queries)
     """
@@ -359,40 +235,24 @@ def _search_with_openai(
         logger.debug("OpenAI API key not configured, returning empty results")
         return ("", [], [])
 
+    _system_prompt = (
+        "You are a financial research assistant. Search for and summarize relevant news articles. "
+        "Always include direct source URLs in your response. "
+        "IMPORTANT: This is a web application interface, not a conversational chat. "
+        "Never offer follow-up actions, suggest what the user can do next, or ask if they want "
+        "additional information. Provide a complete, self-contained response."
+    )
+
     try:
-        client = OpenAI(api_key=OPENAI_API_KEY)
-        
-        # Use exponential backoff retry with rate limiting
-        rate_limiter = get_rate_limiter()
-        
-        def make_api_call():
-            # Use Responses API with web_search tool
-            system_prompt = "You are a financial research assistant. Search for and summarize relevant news articles. Always include direct source URLs in your response. IMPORTANT: This is a web application interface, not a conversational chat. Never offer follow-up actions, suggest what the user can do next, or ask if they want additional information. Provide a complete, self-contained response."
-            result = client.responses.create(
-                model=OPENAI_SEARCH_MODEL,
-                instructions=system_prompt,
-                input=search_prompt,
-                tools=[{"type": "web_search", "search_context_size": OPENAI_SEARCH_CONTEXT_SIZE}],
-                tool_choice="required",  # Require web search for news fetching
-            )
-            return result
-
-        response = retry_with_exponential_backoff(
-            make_api_call,
-            max_retries=5,
-            initial_delay=1.0,
-            max_delay=60.0,
-            rate_limiter=rate_limiter,
+        ai_summary, sources, search_queries = call_responses_api(
+            instructions=_system_prompt,
+            prompt=search_prompt,
         )
-
-        ai_summary, sources, search_queries = _extract_from_response(response)
         logger.debug(f"Web search for {category}: found {len(sources)} sources")
         return (ai_summary, sources, search_queries)
-        
+    except RateLimitError:
+        raise
     except OpenAIError as e:
-        if is_rate_limit_error(e):
-            logger.warning(f"Rate limit hit in web search for {category}: {e}")
-            raise create_rate_limit_error(e) from e
         logger.error(f"OpenAI web search failed for {category}: {e}")
         return ("", [], [])
     except Exception as e:
@@ -401,9 +261,6 @@ def _search_with_openai(
 
 
 # ── Public interface ──────────────────────────────────────────────────────────
-
-def has_openai_key() -> bool:
-    return bool(OPENAI_API_KEY)
 
 
 def fetch_batch_news_for_period(

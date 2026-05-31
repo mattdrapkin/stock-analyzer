@@ -8,19 +8,19 @@ import logging
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
-from .models import NewsArticle, NewsCard, NewsCategory, NewsSearchSummary, StockMovement, TickerAnalysis
+from .models import NewsArticle, NewsCard, NewsSearchSummary, StockMovement, TickerAnalysis
+from .news_fetcher import (
+    fetch_batch_news_for_period,
+    fetch_mock_news_for_movement,
+    fetch_news_summaries_for_movement,
+)
+from .news_parsing import news_card_from_dict, parse_news_category
+from .openai_client import RateLimitError, has_openai_key
 from .stock_data import (
     detect_major_movements,
     fetch_price_history,
     get_ticker_info,
     get_yfinance_news,
-)
-from .news_fetcher import (
-    fetch_batch_news_for_period,
-    fetch_news_summaries_for_movement,
-    fetch_mock_news_for_movement,
-    has_openai_key,
-    RateLimitError,
 )
 
 logger = logging.getLogger(__name__)
@@ -49,13 +49,8 @@ def _cache_set(key: str, value: Any) -> None:
 
 def _to_news_summary(raw: Dict) -> NewsSearchSummary:
     """Convert raw summary dict to NewsSearchSummary model."""
-    cat_str = raw.get("category", "company")
-    try:
-        cat = NewsCategory(cat_str)
-    except ValueError:
-        cat = NewsCategory.COMPANY
     return NewsSearchSummary(
-        category=cat,
+        category=parse_news_category(raw.get("category", "company")),
         ai_summary=raw.get("ai_summary", ""),
         sources=raw.get("sources", []),
         search_queries=raw.get("search_queries", []),
@@ -64,36 +59,18 @@ def _to_news_summary(raw: Dict) -> NewsSearchSummary:
 
 def _to_news_card(raw: Dict) -> NewsCard:
     """Convert raw card dict to NewsCard model."""
-    cat_str = raw.get("category", "company")
-    try:
-        cat = NewsCategory(cat_str)
-    except ValueError:
-        cat = NewsCategory.COMPANY
-    return NewsCard(
-        title=raw.get("title", ""),
-        summary=raw.get("summary", ""),
-        date=raw.get("date") or None,
-        source_name=raw.get("source_name") or None,
-        url=raw.get("url") or None,
-        category=cat,
-        relevance=raw.get("relevance") or None,
-    )
+    return news_card_from_dict(raw)
 
 
 def _to_news_article(raw: Dict, fallback_category: str = "company") -> NewsArticle:
     """Convert raw article dict to NewsArticle model (for backward compatibility)."""
-    cat_str = raw.get("category", fallback_category)
-    try:
-        cat = NewsCategory(cat_str)
-    except ValueError:
-        cat = NewsCategory.COMPANY
     return NewsArticle(
         title=raw.get("title", ""),
         source=raw.get("source", ""),
         url=raw.get("url") or None,
         published_at=raw.get("published_at"),
         summary=raw.get("summary") or None,
-        category=cat,
+        category=parse_news_category(raw.get("category", fallback_category)),
     )
 
 

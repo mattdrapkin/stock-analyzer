@@ -35,9 +35,9 @@ from .models import (
 )
 from .analyzer import build_analysis
 from .basket_analyzer import analyze_basket
-from .chat import chat_with_ticker, has_openai_key
+from .chat import chat_with_ticker
 from .fun_facts import generate_fun_facts
-from .news_fetcher import has_openai_key as news_has_openai_key
+from .openai_client import has_openai_key
 from .rate_limit_utils import RateLimitError
 from .pdf_generator import generate_analysis_pdf, generate_basket_pdf
 from .stock_data import fetch_price_history
@@ -210,10 +210,11 @@ def _get_mock_analysis(ticker: str, start_date: date, end_date: date, min_moveme
 )
 def health_check() -> HealthResponse:
     """Returns API status and indicates which external keys are configured."""
+    configured = has_openai_key()
     return HealthResponse(
         status="ok",
-        news_api_configured=news_has_openai_key(),
-        openai_configured=has_openai_key(),
+        news_api_configured=configured,
+        openai_configured=configured,
     )
 
 
