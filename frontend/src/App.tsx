@@ -687,6 +687,34 @@ const App: React.FC = () => {
     setEndDate(null);
   };
 
+  const getCytdStartDate = (): Date => {
+    const now = new Date();
+    return new Date(now.getFullYear(), 0, 1); // January 1st of current year
+  };
+
+  const getFytdStartDate = (): Date => {
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const currentMonth = now.getMonth();
+    
+    // Fiscal year ends June 30, so if we're before July, fiscal year started previous year
+    if (currentMonth < 6) {
+      return new Date(currentYear - 1, 5, 30); // June 30th of previous year
+    } else {
+      return new Date(currentYear, 5, 30); // June 30th of current year
+    }
+  };
+
+  const setCytdDates = () => {
+    setStartDate(getCytdStartDate());
+    setEndDate(new Date());
+  };
+
+  const setFytdDates = () => {
+    setStartDate(getFytdStartDate());
+    setEndDate(new Date());
+  };
+
   const handleBasketAnalysis = async (e: React.FormEvent) => {
     e.preventDefault();
     
@@ -766,6 +794,16 @@ const App: React.FC = () => {
   const clearBasketDates = () => {
     setBasketStartDate(null);
     setBasketEndDate(null);
+  };
+
+  const setBasketCytdDates = () => {
+    setBasketStartDate(getCytdStartDate());
+    setBasketEndDate(new Date());
+  };
+
+  const setBasketFytdDates = () => {
+    setBasketStartDate(getFytdStartDate());
+    setBasketEndDate(new Date());
   };
 
   const handleSelectBasket = (basketId: string) => {
@@ -928,6 +966,24 @@ const App: React.FC = () => {
                       dateFormat="MMM d, yyyy"
                     />
                   </div>
+                  <div className="flex gap-1">
+                    <button
+                      type="button"
+                      onClick={setCytdDates}
+                      className="px-2.5 py-2 text-xs font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
+                      title="Calendar Year-to-Date"
+                    >
+                      CYTD
+                    </button>
+                    <button
+                      type="button"
+                      onClick={setFytdDates}
+                      className="px-2.5 py-2 text-xs font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
+                      title="Fiscal Year-to-Date"
+                    >
+                      FYTD
+                    </button>
+                  </div>
                   {(startDate || endDate) && (
                     <button
                       type="button"
@@ -1081,6 +1137,24 @@ const App: React.FC = () => {
                       className="pl-10 pr-4 py-2 bg-slate-100 border-transparent focus:bg-white focus:ring-2 focus:ring-indigo-500 rounded-lg outline-none w-full md:w-36 transition-all text-sm"
                       dateFormat="MMM d, yyyy"
                     />
+                  </div>
+                  <div className="flex gap-1">
+                    <button
+                      type="button"
+                      onClick={setBasketCytdDates}
+                      className="px-2.5 py-2 text-xs font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
+                      title="Calendar Year-to-Date"
+                    >
+                      CYTD
+                    </button>
+                    <button
+                      type="button"
+                      onClick={setBasketFytdDates}
+                      className="px-2.5 py-2 text-xs font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
+                      title="Fiscal Year-to-Date"
+                    >
+                      FYTD
+                    </button>
                   </div>
                   {(basketStartDate || basketEndDate) && (
                     <button

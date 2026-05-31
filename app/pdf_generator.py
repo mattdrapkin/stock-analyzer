@@ -247,6 +247,158 @@ def generate_basket_performance_chart(basket_response: BasketAnalysisResponse) -
         plt.close(fig)
 
 
+def generate_industry_breakdown_chart(basket_response: BasketAnalysisResponse) -> BytesIO:
+    """
+    Generate an industry breakdown bar chart showing count of stocks per industry (top 10).
+    
+    Returns:
+        BytesIO: Image data in PNG format
+    """
+    try:
+        if not basket_response.results:
+            return None
+        
+        # Group by industry
+        industry_data = {}
+        for result in basket_response.results:
+            industry = result.industry or 'Unknown'
+            if industry not in industry_data:
+                industry_data[industry] = {'count': 0, 'tickers': []}
+            industry_data[industry]['count'] += 1
+            industry_data[industry]['tickers'].append(result.ticker)
+        
+        # Convert to sorted list and take top 10
+        industry_list = sorted(
+            [{'name': k, 'value': v['count'], 'tickers': v['tickers']} for k, v in industry_data.items()],
+            key=lambda x: x['value'],
+            reverse=True
+        )[:10]
+        
+        if not industry_list:
+            return None
+        
+        industries = [item['name'] for item in industry_list]
+        counts = [item['value'] for item in industry_list]
+        
+        # Create figure
+        fig, ax = plt.subplots(figsize=(10, 5))
+        fig.patch.set_facecolor('white')
+        
+        # Plot horizontal bar chart
+        bars = ax.barh(industries, counts, color='#10b981')
+        
+        # Formatting
+        ax.set_title('Industry Breakdown (Top 10)', fontsize=12, fontweight='bold')
+        ax.set_xlabel('Number of Stocks', fontsize=10)
+        ax.set_ylabel('Industry', fontsize=10)
+        ax.grid(True, alpha=0.3, axis='x')
+        
+        # Add value labels on bars
+        for bar, count in zip(bars, counts):
+            ax.text(bar.get_width() + 0.1, 
+                   bar.get_y() + bar.get_height()/2,
+                   f'{count}',
+                   va='center', ha='left',
+                   fontsize=9)
+        
+        plt.tight_layout()
+        
+        # Save to BytesIO
+        img_buffer = BytesIO()
+        plt.savefig(img_buffer, format='png', dpi=150, bbox_inches='tight')
+        img_buffer.seek(0)
+        
+        return img_buffer
+    except Exception as e:
+        logger.error(f"Error generating industry breakdown chart: {e}")
+        return None
+    finally:
+        plt.close(fig)
+
+
+def generate_industry_performance_chart(basket_response: BasketAnalysisResponse) -> BytesIO:
+    """
+    Generate an industry performance bar chart showing average change percentage per industry (top 10).
+    
+    Returns:
+        BytesIO: Image data in PNG format
+    """
+    try:
+        if not basket_response.results:
+            return None
+        
+        # Group by industry and calculate average change
+        industry_data = {}
+        for result in basket_response.results:
+            industry = result.industry or 'Unknown'
+            if industry not in industry_data:
+                industry_data[industry] = {'total_change': 0, 'count': 0, 'tickers': []}
+            if result.total_change_pct is not None:
+                industry_data[industry]['total_change'] += result.total_change_pct
+                industry_data[industry]['count'] += 1
+                industry_data[industry]['tickers'].append(result.ticker)
+        
+        # Calculate averages and convert to sorted list
+        industry_list = []
+        for industry, data in industry_data.items():
+            if data['count'] > 0:
+                avg_change = data['total_change'] / data['count']
+                industry_list.append({
+                    'name': industry,
+                    'avgChange': avg_change,
+                    'tickers': data['tickers']
+                })
+        
+        # Sort by count (to match frontend behavior) and take top 10
+        industry_list = sorted(
+            industry_list,
+            key=lambda x: len(x['tickers']),
+            reverse=True
+        )[:10]
+        
+        if not industry_list:
+            return None
+        
+        industries = [item['name'] for item in industry_list]
+        avg_changes = [item['avgChange'] for item in industry_list]
+        colors = ['#10b981' if c >= 0 else '#ef4444' for c in avg_changes]
+        
+        # Create figure
+        fig, ax = plt.subplots(figsize=(10, 5))
+        fig.patch.set_facecolor('white')
+        
+        # Plot horizontal bar chart
+        bars = ax.barh(industries, avg_changes, color=colors)
+        
+        # Formatting
+        ax.set_title('Industry Performance (Top 10)', fontsize=12, fontweight='bold')
+        ax.set_xlabel('Average Change (%)', fontsize=10)
+        ax.set_ylabel('Industry', fontsize=10)
+        ax.grid(True, alpha=0.3, axis='x')
+        
+        # Add value labels on bars
+        for bar, change in zip(bars, avg_changes):
+            ax.text(bar.get_width() + (0.3 if change >= 0 else -0.3), 
+                   bar.get_y() + bar.get_height()/2,
+                   f'{change:+.1f}%',
+                   va='center', ha='left' if change >= 0 else 'right',
+                   fontsize=9)
+        
+        plt.tight_layout()
+        
+        # Save to BytesIO
+        img_buffer = BytesIO()
+        plt.savefig(img_buffer, format='png', dpi=150, bbox_inches='tight')
+        img_buffer.seek(0)
+        
+        return img_buffer
+    except Exception as e:
+        logger.error(f"Error generating industry performance chart: {e}")
+        return None
+    finally:
+        plt.close(fig)
+
+
 def generate_analysis_pdf(analysis: TickerAnalysis, params: dict) -> bytes:
     """
     Generate a PDF report for a stock analysis.
@@ -610,6 +762,20 @@ def generate_basket_pdf(basket_response: BasketAnalysisResponse, params: dict) -
     basket_chart = generate_basket_performance_chart(basket_response)
     if basket_chart:
         img = Image(basket_chart, width=6.5 * inch, height=3 * inch)
+        story.append(img)
+        story.append(Spacer(1, 0.3 * inch))
+    
+    # Generate and add industry breakdown chart
+    industry_breakdown_chart = generate_industry_breakdown_chart(basket_response)
+    if industry_breakdown_chart:
+        img = Image(industry_breakdown_chart, width=6.5 * inch, height=3 * inch)
+        story.append(img)
+        story.append(Spacer(1, 0.3 * inch))
+    
+    # Generate and add industry performance chart
+    industry_performance_chart = generate_industry_performance_chart(basket_response)
+    if industry_performance_chart:
+        img = Image(industry_performance_chart, width=6.5 * inch, height=3 * inch)
         story.append(img)
         story.append(Spacer(1, 0.3 * inch))
     

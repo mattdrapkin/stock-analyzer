@@ -32,13 +32,54 @@ logger = logging.getLogger(__name__)
 # Configurable limit for news fetching on biggest movers
 BASKET_NEWS_TOP_N: int = int(os.getenv("BASKET_NEWS_TOP_N", "10"))
 
+# Maximum number of tickers to include in a single news batch
+BASKET_NEWS_MAX_BATCH_SIZE: int = int(os.getenv("BASKET_NEWS_MAX_BATCH_SIZE", "20"))
 
-# Structured JSON prompt for basket news fetching
+
+# Structured JSON prompt for basket news fetching (combined selection + news finding)
 BASKET_NEWS_SYSTEM_PROMPT = """\
-Return ONLY valid JSON: {"ticker_news": {"TICKER": [{"title": "...", "summary": "...", "date": "YYYY-MM-DD", "source_name": "...", "url": "https://...", "category": "company|competitor|macro", "relevance": "..."}]}}.
+You are a financial research assistant with real-time web search access.
+Your task is to identify which securities in a basket are most likely to have meaningful news, then find that news.
 
-Rules: Find news for 50%+ of tickers. 2-3 articles per ticker. category must be company/competitor/macro. No markdown or extra text.
+You MUST respond ONLY with a valid JSON object — no markdown, no code blocks, no preamble.
+
+Required JSON format:
+{
+  "ticker_news": {
+    "TICKER1": [
+      {
+        "title": "Exact headline of the article",
+        "summary": "One sentence capturing the key investment takeaway",
+        "date": "YYYY-MM-DD",
+        "source_name": "Publication name (e.g. Bloomberg, Reuters, WSJ, CNBC)",
+        "url": "https://full-url-to-article",
+        "category": "company",
+        "relevance": "One sentence explaining why this likely impacted the stock price"
+      }
+    ],
+    "TICKER2": [...]
+  }
+}
+
+Selection criteria for which tickers to find news for:
+- Prioritize securities with significant price movements (absolute % change > 5%)
+- Include securities that might be affected by sector-wide or macro events
+- Favor securities with higher trading volume or market cap
+- Aim for 10-15 tickers maximum, but fewer if movements are insignificant
+- If fewer than 5 tickers have meaningful movements, select only those
+- If more than 15 have significant movements, select the most impactful ones
+
+News finding rules:
+- Find 2-3 articles per selected ticker (fewer if no significant news available)
+- category must be exactly one of: "company", "competitor", "macro"
+- date must be in YYYY-MM-DD format, or null if unknown
+- url must be a real, complete URL starting with https://, or null if unavailable
+- title, summary, and relevance must be non-empty strings
+- If a ticker has no meaningful news, omit it from the response entirely
+- Do not include any text outside the JSON object
 """
+
+
 
 
 def _parse_basket_news_cards_from_response(content: str) -> Dict[str, List[Dict]]:
@@ -107,9 +148,12 @@ def fetch_basket_news_batch(
     include_competitors: bool = False,
     include_macro: bool = False,
     prioritize: bool = False,
+    ticker_results: Optional[List[BasketTickerResult]] = None,
 ) -> Dict[str, List[NewsCard]]:
     """
     Fetch news for multiple tickers in a single batch OpenAI call using Responses API with web_search tool.
+    
+    The AI will intelligently select which tickers have meaningful news based on their performance.
     
     Args:
         ticker_info: List of dicts with 'ticker' and 'company_name' keys
@@ -118,6 +162,7 @@ def fetch_basket_news_batch(
         include_competitors: Whether to include competitor/industry news
         include_macro: Whether to include macro/geopolitical news
         prioritize: Whether these are priority tickers (biggest winners/losers)
+        ticker_results: Optional list of BasketTickerResult with performance data for intelligent selection
     
     Returns:
         Dict mapping ticker symbols to lists of NewsCard objects
@@ -130,9 +175,6 @@ def fetch_basket_news_batch(
         return {}
 
     try:
-        ticker_list = [f"{info['ticker']} ({info['company_name']})" for info in ticker_info]
-        ticker_str = ", ".join(ticker_list)
-
         categories = ["company events"]
         if include_competitors:
             categories.append("competitor/industry")
@@ -140,20 +182,42 @@ def fetch_basket_news_batch(
             categories.append("macro")
         categories_str = ", ".join(categories)
 
-        priority_context = ""
-        if prioritize:
-            priority_context = (
-                "These are the biggest winners and losers in the basket. "
-                "PRIORITIZE finding news for these tickers as they are the most significant movers. "
+        # Build detailed ticker context with performance data if available
+        if ticker_results:
+            ticker_context = []
+            for info in ticker_info:
+                # Find matching result
+                result = next((r for r in ticker_results if r.ticker == info['ticker']), None)
+                if result:
+                    movement_str = f"{abs(result.total_change_pct):.1f}%" if result.total_change_pct else "N/A"
+                    ticker_context.append(
+                        f"- {result.ticker} ({result.company_name or 'N/A'}): {result.direction} {movement_str}, "
+                        f"Sector: {result.sector or 'N/A'}, Industry: {result.industry or 'N/A'}"
+                    )
+                else:
+                    ticker_context.append(
+                        f"- {info['ticker']} ({info['company_name']}): Performance data not available"
+                    )
+            
+            prompt = (
+                f"Analyze the following {len(ticker_info)} securities and find news for those most likely to have "
+                f"meaningful coverage that explains their price movements:\n\n"
+                f"{chr(10).join(ticker_context)}\n\n"
+                f"Date range: {from_date.isoformat()} to {to_date.isoformat()}. "
+                f"Topics: {categories_str}. "
+                f"Use the selection criteria in the system prompt to determine which tickers warrant news coverage."
             )
-
-        prompt = (
-            f"News for {ticker_str} "
-            f"{from_date.isoformat()} to {to_date.isoformat()}. "
-            f"{priority_context}"
-            f"Topics: {categories_str}. "
-            f"2-3 articles per ticker. 50%+ coverage."
-        )
+        else:
+            # Fallback to simple format if no performance data
+            ticker_list = [f"{info['ticker']} ({info['company_name']})" for info in ticker_info]
+            ticker_str = ", ".join(ticker_list)
+            
+            prompt = (
+                f"News for {ticker_str} "
+                f"{from_date.isoformat()} to {to_date.isoformat()}. "
+                f"Topics: {categories_str}. "
+                f"Find news for tickers most likely to have meaningful coverage."
+            )
 
         content, _, _ = call_responses_api(
             instructions=BASKET_NEWS_SYSTEM_PROMPT,
@@ -403,25 +467,25 @@ def analyze_basket(
     valid_results.sort(key=lambda x: abs(x.total_change_pct), reverse=True)
     results = valid_results
     
-    # Batch fetch news for top N biggest movers in a single API call
+    # Batch fetch news - let AI select which tickers have meaningful news
     if include_news and ticker_info_list:
-        # Prioritize top N biggest movers for news fetching (configurable via BASKET_NEWS_TOP_N)
-        top_n = min(BASKET_NEWS_TOP_N, len(results))
-        top_movers = results[:top_n]
-        top_ticker_info = [
+        # Pass top N tickers (or all if fewer) to AI, which will decide which have meaningful news
+        top_n = min(BASKET_NEWS_MAX_BATCH_SIZE, len(results))
+        ticker_info_for_news = [
             {'ticker': r.ticker, 'company_name': r.company_name}
-            for r in top_movers
+            for r in results[:top_n]
         ]
         
-        logger.info(f"Fetching batch news for top {top_n} biggest movers out of {len(results)} total")
+        logger.info(f"Fetching batch news for {len(ticker_info_for_news)} tickers (AI will select which have meaningful news)")
         try:
             batch_news = fetch_basket_news_batch(
-                ticker_info=top_ticker_info,
+                ticker_info=ticker_info_for_news,
                 from_date=start_date,
                 to_date=end_date,
                 include_competitors=include_competitors,
                 include_macro=include_macro,
                 prioritize=True,  # Flag to indicate these are priority tickers
+                ticker_results=results[:top_n],  # Pass performance data for intelligent selection
             )
             
             logger.info(f"Batch news fetch returned data for {len(batch_news)} tickers")
