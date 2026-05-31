@@ -18,13 +18,306 @@ import {
   BarChart3
 } from 'lucide-react';
 import { stockApi } from './api';
-import type { TickerAnalysis, StockMovement, NewsCard, BasketAnalysisResponse, BasketTickerResult } from './api';
+import type { TickerAnalysis, StockMovement, NewsCard, BasketAnalysisResponse, BasketTickerResult, PriceHistoryResponse } from './api';
 import { format } from 'date-fns';
 import HeaderNavigation, { type Section } from './components/HeaderNavigation';
 import LoadingScreen from './components/LoadingScreen';
 import StockChart from './components/StockChart';
 import BasketAnalytics from './components/BasketAnalytics';
 import { DEFAULT_BASKETS } from './constants/defaultBaskets';
+
+// Collapsible Section Component
+interface CollapsibleSectionProps {
+  title: string;
+  icon: React.ComponentType<{ className?: string }>;
+  expanded: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+  badge?: string;
+  className?: string;
+}
+
+const CollapsibleSection: React.FC<CollapsibleSectionProps> = ({ 
+  title, 
+  icon: Icon, 
+  expanded, 
+  onToggle, 
+  children, 
+  badge,
+  className = ''
+}) => {
+  return (
+    <div className={`bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden ${className}`}>
+      <button
+        onClick={onToggle}
+        className="w-full py-3 px-4 md:py-3 md:px-6 flex items-center justify-between gap-4 hover:bg-slate-50 transition-colors text-left"
+      >
+        <div className="flex items-center gap-3">
+          <Icon className="text-indigo-600 w-5 h-5" />
+          <h3 className="text-lg font-bold">{title}</h3>
+          {badge && (
+            <span className="text-xs font-normal text-slate-400 bg-slate-100 px-2.5 py-1 rounded-full">
+              {badge}
+            </span>
+          )}
+        </div>
+        <div className={`p-2 rounded-full transition-transform ${expanded ? 'rotate-180 bg-slate-100' : 'text-slate-400'}`}>
+          <ChevronDown className="w-5 h-5" />
+        </div>
+      </button>
+      {expanded && (
+        <div className="px-4 pb-6 md:px-6 md:pb-8 border-t border-slate-50 pt-6">
+          {children}
+        </div>
+      )}
+    </div>
+  );
+};
+
+const categoryConfig = {
+  company: { bg: 'bg-indigo-50 text-indigo-700 border-indigo-100', label: 'Company' },
+  competitor: { bg: 'bg-amber-50 text-amber-700 border-amber-100', label: 'Competitor' },
+  macro: { bg: 'bg-emerald-50 text-emerald-700 border-emerald-100', label: 'Macro' },
+} as const;
+
+const NewsCardItem: React.FC<{ card: NewsCard }> = ({ card }) => {
+  const cfg = categoryConfig[card.category] ?? { bg: 'bg-slate-50 text-slate-600 border-slate-100', label: card.category };
+
+  // Parse markdown-style links in summary
+  const renderSummaryWithLinks = (text: string) => {
+    const parts: React.ReactNode[] = [];
+    let lastIndex = 0;
+    const linkRegex = /\[([^\]]+)\]\(([^)]+)\)/g;
+    let match;
+
+    while ((match = linkRegex.exec(text)) !== null) {
+      // Add text before the link
+      if (match.index > lastIndex) {
+        parts.push(text.slice(lastIndex, match.index));
+      }
+      // Add the link
+      parts.push(
+        <a
+          key={match.index}
+          href={match[2]}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-indigo-600 hover:text-indigo-800 underline"
+        >
+          {match[1]}
+        </a>
+      );
+      lastIndex = match.index + match[0].length;
+    }
+    // Add remaining text
+    if (lastIndex < text.length) {
+      parts.push(text.slice(lastIndex));
+    }
+    return parts.length > 0 ? parts : text;
+  };
+
+  const inner = (
+    <div className={`group h-full bg-white border border-slate-200 rounded-xl p-4 transition-all hover:shadow-md hover:border-indigo-200 flex flex-col gap-2 ${
+      card.url ? 'cursor-pointer' : ''
+    }`}>
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border ${cfg.bg}`}>
+            {cfg.label}
+          </span>
+          {card.source_name && (
+            <span className="text-xs text-slate-400 font-medium">{card.source_name}</span>
+          )}
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {card.swing_pct !== undefined && card.swing_pct !== null && (
+            <span className={`text-xs font-bold px-2 py-0.5 rounded ${
+              card.swing_pct > 0
+                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                : card.swing_pct < 0
+                ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                : 'bg-slate-50 text-slate-600 border border-slate-200'
+            }`}>
+              {card.swing_pct > 0 ? '+' : ''}{card.swing_pct.toFixed(1)}%
+            </span>
+          )}
+          {card.date && (
+            <span className="text-xs text-slate-400 whitespace-nowrap flex items-center gap-1">
+              <Calendar className="w-3 h-3" />
+              {card.date}
+            </span>
+          )}
+        </div>
+      </div>
+
+      <h4 className={`font-semibold text-slate-900 leading-snug ${
+        card.url ? 'group-hover:text-indigo-600 transition-colors' : ''
+      }`}>
+        {card.title}
+        {card.url && (
+          <ExternalLink className="w-3 h-3 inline ml-1 opacity-0 group-hover:opacity-100 transition-opacity" />
+        )}
+      </h4>
+
+      <p className="text-sm text-slate-600 leading-relaxed flex-1">{renderSummaryWithLinks(card.summary)}</p>
+
+      {card.relevance && (
+        <p className="text-xs text-slate-400 italic border-t border-slate-100 pt-2 mt-auto">
+          {card.relevance}
+        </p>
+      )}
+    </div>
+  );
+
+  if (card.url) {
+    return (
+      <a href={card.url} target="_blank" rel="noopener noreferrer" className="block h-full">
+        {inner}
+      </a>
+    );
+  }
+  return inner;
+};
+
+const MovementCard: React.FC<{ move: StockMovement; batchNewsCards?: NewsCard[] }> = ({ move, batchNewsCards }) => {
+  const [expanded, setExpanded] = useState(false);
+  const isUp = move.direction === 'up';
+
+  // Filter news cards for this specific date (use local timezone to match backend)
+  const moveDateStr = new Date(move.date).toLocaleDateString('en-CA');
+  const cardsForDay = batchNewsCards?.filter(card => card.date === moveDateStr) || [];
+
+  return (
+    <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden transition-all hover:shadow-md">
+      <div 
+        className="p-4 md:p-6 cursor-pointer flex items-center justify-between gap-4"
+        onClick={() => setExpanded(!expanded)}
+      >
+        <div className="flex items-center gap-4">
+          <div className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 ${
+            isUp ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'
+          }`}>
+            {isUp ? <TrendingUp className="w-6 h-6" /> : <TrendingDown className="w-6 h-6" />}
+          </div>
+          <div>
+            <div className="text-sm text-slate-500 font-medium">
+              {format(new Date(move.date), 'EEEE, MMMM d, yyyy')}
+            </div>
+            <div className="flex items-center gap-2">
+              <span className={`text-xl font-bold ${isUp ? 'text-emerald-600' : 'text-rose-600'}`}>
+                {isUp ? '+' : ''}{Number(move.change_pct).toFixed(1)}%
+              </span>
+              <span className="text-slate-400 text-sm font-medium">
+                ${Number(move.open).toFixed(2)} → ${Number(move.close).toFixed(2)}
+              </span>
+            </div>
+          </div>
+        </div>
+        
+        <div className="flex items-center gap-3">
+          <div className="hidden md:flex flex-col items-end">
+            <span className="text-xs text-slate-400 uppercase font-bold tracking-wider">Volume</span>
+            <span className="text-sm font-bold text-slate-700">{(move.volume / 1000000).toFixed(1)}M</span>
+          </div>
+          <div className={`p-2 rounded-full transition-transform ${expanded ? 'rotate-180 bg-slate-100' : 'text-slate-400'}`}>
+            <ChevronDown className="w-5 h-5" />
+          </div>
+        </div>
+      </div>
+
+      {expanded && (
+        <div className="px-4 pb-6 md:px-6 md:pb-8 border-t border-slate-50 pt-6">
+          <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4">Related News</h4>
+          <div className="space-y-3">
+            {cardsForDay.length > 0 ? (
+              cardsForDay.map((card, j) => (
+                <NewsCardItem key={j} card={card} />
+              ))
+            ) : (
+              <div className="bg-slate-50 p-4 rounded-xl text-center border border-dashed border-slate-200">
+                <p className="text-sm text-slate-400">No specific news articles found for this date.</p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const BasketResultCard: React.FC<{ result: BasketTickerResult; rank: number }> = ({ result, rank }) => {
+  const isUp = result.direction === 'up';
+  const [expanded, setExpanded] = useState(false);
+  const hasNews = result.news_cards && result.news_cards.length > 0;
+  
+  return (
+    <div className="bg-slate-50 rounded-xl overflow-hidden hover:bg-slate-100 transition-colors">
+      <div 
+        className="p-4 flex items-center gap-4 cursor-pointer"
+        onClick={() => setExpanded(!expanded)}
+      >
+        <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 font-bold text-sm ${
+          rank <= 3 ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-600'
+        }`}>
+          {rank}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="font-bold text-slate-900">{result.ticker}</span>
+            {result.company_name && (
+              <span className="text-sm text-slate-500 truncate">{result.company_name}</span>
+            )}
+            {hasNews && (
+              <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-medium">
+                {result.news_cards.length} news
+              </span>
+            )}
+          </div>
+          {(result.sector || result.industry) && (
+            <div className="text-xs text-slate-400 mb-1">
+              {result.sector && <span>{result.sector}</span>}
+              {result.sector && result.industry && <span> • </span>}
+              {result.industry && <span>{result.industry}</span>}
+            </div>
+          )}
+          <div className="flex items-center gap-3 text-sm">
+            <span className="text-slate-500">
+              {result.start_price !== null ? `$${result.start_price.toFixed(2)}` : 'N/A'} → {result.end_price !== null ? `$${result.end_price.toFixed(2)}` : 'N/A'}
+            </span>
+          </div>
+        </div>
+        <div className={`text-right shrink-0`}>
+          <div className={`text-xl font-bold ${isUp ? 'text-emerald-600' : 'text-rose-600'}`}>
+            {result.total_change_pct !== null ? `${isUp ? '+' : ''}${result.total_change_pct.toFixed(1)}%` : 'N/A'}
+          </div>
+          <div className={`text-xs font-bold uppercase ${isUp ? 'text-emerald-500' : 'text-rose-500'}`}>
+            {result.direction}
+          </div>
+        </div>
+        <div className={`p-2 rounded-full transition-transform ${expanded ? 'rotate-180 bg-slate-200' : 'text-slate-400'}`}>
+          <ChevronDown className="w-5 h-5" />
+        </div>
+      </div>
+
+      {expanded && (
+        <div className="px-4 pb-4 border-t border-slate-200 pt-4">
+          <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-3">Related News</h4>
+          <div className="grid grid-cols-1 gap-3">
+            {hasNews ? (
+              result.news_cards.map((card, j) => (
+                <NewsCardItem key={j} card={card} />
+              ))
+            ) : (
+              <div className="bg-slate-50 p-4 rounded-xl text-center border border-dashed border-slate-200">
+                <p className="text-sm text-slate-400">No news articles found for this stock.</p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
 
 // Helper function to format basket summary with bold tickers and color-coded percentages
 const formatBasketSummary = (text: string, validTickers: string[]): React.ReactNode => {
@@ -80,7 +373,56 @@ const formatBasketSummary = (text: string, validTickers: string[]): React.ReactN
     parts.push(text.slice(lastIndex));
   }
 
-  return parts.length > 0 ? parts : text;
+  // Second pass: highlight standalone percentages (not attached to tickers)
+  // This catches percentages like "+80.5%", "(+70.8%)", "(down 67.5%)"
+  const processedParts: React.ReactNode[] = [];
+  let partIndex = 0;
+
+  for (const part of parts) {
+    if (typeof part === 'string') {
+      // Process string parts for standalone percentages
+      const subParts: React.ReactNode[] = [];
+      let subLastIndex = 0;
+      // Match percentages with optional parentheses and "down" keyword
+      // Matches: +80.5%, (70.8%), (-5.2%), (down 67.5%), etc.
+      const pctRegex = /\(?\s*(?:down\s+)?([+-]?\d+\.?\d*)\s*%\s*\)?/g;
+      let pctMatch;
+
+      while ((pctMatch = pctRegex.exec(part)) !== null) {
+        // Add text before the percentage
+        if (pctMatch.index > subLastIndex) {
+          subParts.push(part.slice(subLastIndex, pctMatch.index));
+        }
+
+        const pctValue = parseFloat(pctMatch[1]);
+        if (!isNaN(pctValue)) {
+          const colorClass = pctValue >= 0 ? 'text-emerald-600 font-bold' : 'text-rose-600 font-bold';
+          subParts.push(
+            <span key={`pct-${partIndex}-${pctMatch.index}`} className={colorClass}>
+              {pctMatch[0]}
+            </span>
+          );
+        } else {
+          subParts.push(pctMatch[0]);
+        }
+
+        subLastIndex = pctMatch.index + pctMatch[0].length;
+      }
+
+      // Add remaining text
+      if (subLastIndex < part.length) {
+        subParts.push(part.slice(subLastIndex));
+      }
+
+      processedParts.push(...subParts);
+    } else {
+      // Already a React element, keep as-is
+      processedParts.push(part);
+    }
+    partIndex++;
+  }
+
+  return processedParts.length > 0 ? processedParts : text;
 };
 
 // Helper function to parse basket summary into broad theme and detailed analysis
@@ -138,7 +480,7 @@ const App: React.FC = () => {
   const [summaryLoading, setSummaryLoading] = useState(false);
 
   // Price history data for charts
-  const [priceHistory, setPriceHistory] = useState<any>(null);
+  const [priceHistory, setPriceHistory] = useState<PriceHistoryResponse | null>(null);
   const [priceHistoryLoading, setPriceHistoryLoading] = useState(false);
 
   // Threshold state
@@ -861,7 +1203,7 @@ const App: React.FC = () => {
                         </div>
                       </div>
                     ) : priceHistory ? (
-                      <StockChart data={priceHistory.data} />
+                      <StockChart data={priceHistory.data} newsCards={analysis.batch_news_cards} />
                     ) : (
                       <div className="flex items-center justify-center py-12 bg-slate-50 rounded-lg">
                         <p className="text-slate-500">Unable to load chart data</p>
@@ -1182,298 +1524,4 @@ const App: React.FC = () => {
   );
 };
 
-const MovementCard: React.FC<{ move: StockMovement; batchNewsCards?: NewsCard[] }> = ({ move, batchNewsCards }) => {
-  const [expanded, setExpanded] = useState(false);
-  const isUp = move.direction === 'up';
-
-  // Filter news cards for this specific date (use local timezone to match backend)
-  const moveDateStr = new Date(move.date).toLocaleDateString('en-CA');
-  const cardsForDay = batchNewsCards?.filter(card => card.date === moveDateStr) || [];
-
-  return (
-    <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden transition-all hover:shadow-md">
-      <div 
-        className="p-4 md:p-6 cursor-pointer flex items-center justify-between gap-4"
-        onClick={() => setExpanded(!expanded)}
-      >
-        <div className="flex items-center gap-4">
-          <div className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 ${
-            isUp ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'
-          }`}>
-            {isUp ? <TrendingUp className="w-6 h-6" /> : <TrendingDown className="w-6 h-6" />}
-          </div>
-          <div>
-            <div className="text-sm text-slate-500 font-medium">
-              {format(new Date(move.date), 'EEEE, MMMM d, yyyy')}
-            </div>
-            <div className="flex items-center gap-2">
-              <span className={`text-xl font-bold ${isUp ? 'text-emerald-600' : 'text-rose-600'}`}>
-                {isUp ? '+' : ''}{Number(move.change_pct).toFixed(1)}%
-              </span>
-              <span className="text-slate-400 text-sm font-medium">
-                ${Number(move.open).toFixed(2)} → ${Number(move.close).toFixed(2)}
-              </span>
-            </div>
-          </div>
-        </div>
-        
-        <div className="flex items-center gap-3">
-          <div className="hidden md:flex flex-col items-end">
-            <span className="text-xs text-slate-400 uppercase font-bold tracking-wider">Volume</span>
-            <span className="text-sm font-bold text-slate-700">{(move.volume / 1000000).toFixed(1)}M</span>
-          </div>
-          <div className={`p-2 rounded-full transition-transform ${expanded ? 'rotate-180 bg-slate-100' : 'text-slate-400'}`}>
-            <ChevronDown className="w-5 h-5" />
-          </div>
-        </div>
-      </div>
-
-      {expanded && (
-        <div className="px-4 pb-6 md:px-6 md:pb-8 border-t border-slate-50 pt-6">
-          <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4">Related News</h4>
-          <div className="space-y-3">
-            {cardsForDay.length > 0 ? (
-              cardsForDay.map((card, j) => (
-                <NewsCardItem key={j} card={card} />
-              ))
-            ) : (
-              <div className="bg-slate-50 p-4 rounded-xl text-center border border-dashed border-slate-200">
-                <p className="text-sm text-slate-400">No specific news articles found for this date.</p>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
-
-const categoryConfig = {
-  company: { bg: 'bg-indigo-50 text-indigo-700 border-indigo-100', label: 'Company' },
-  competitor: { bg: 'bg-amber-50 text-amber-700 border-amber-100', label: 'Competitor' },
-  macro: { bg: 'bg-emerald-50 text-emerald-700 border-emerald-100', label: 'Macro' },
-} as const;
-
-const NewsCardItem: React.FC<{ card: NewsCard }> = ({ card }) => {
-  const cfg = categoryConfig[card.category] ?? { bg: 'bg-slate-50 text-slate-600 border-slate-100', label: card.category };
-
-  // Parse markdown-style links in summary
-  const renderSummaryWithLinks = (text: string) => {
-    const parts: React.ReactNode[] = [];
-    let lastIndex = 0;
-    const linkRegex = /\[([^\]]+)\]\(([^)]+)\)/g;
-    let match;
-
-    while ((match = linkRegex.exec(text)) !== null) {
-      // Add text before the link
-      if (match.index > lastIndex) {
-        parts.push(text.slice(lastIndex, match.index));
-      }
-      // Add the link
-      parts.push(
-        <a
-          key={match.index}
-          href={match[2]}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-indigo-600 hover:text-indigo-800 underline"
-        >
-          {match[1]}
-        </a>
-      );
-      lastIndex = match.index + match[0].length;
-    }
-    // Add remaining text
-    if (lastIndex < text.length) {
-      parts.push(text.slice(lastIndex));
-    }
-    return parts.length > 0 ? parts : text;
-  };
-
-  const inner = (
-    <div className={`group h-full bg-white border border-slate-200 rounded-xl p-4 transition-all hover:shadow-md hover:border-indigo-200 flex flex-col gap-2 ${
-      card.url ? 'cursor-pointer' : ''
-    }`}>
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex items-center gap-1.5 flex-wrap">
-          <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border ${cfg.bg}`}>
-            {cfg.label}
-          </span>
-          {card.source_name && (
-            <span className="text-xs text-slate-400 font-medium">{card.source_name}</span>
-          )}
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          {card.swing_pct !== undefined && card.swing_pct !== null && (
-            <span className={`text-xs font-bold px-2 py-0.5 rounded ${
-              card.swing_pct > 0
-                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                : card.swing_pct < 0
-                ? 'bg-rose-50 text-rose-700 border border-rose-200'
-                : 'bg-slate-50 text-slate-600 border border-slate-200'
-            }`}>
-              {card.swing_pct > 0 ? '+' : ''}{card.swing_pct.toFixed(1)}%
-            </span>
-          )}
-          {card.date && (
-            <span className="text-xs text-slate-400 whitespace-nowrap flex items-center gap-1">
-              <Calendar className="w-3 h-3" />
-              {card.date}
-            </span>
-          )}
-        </div>
-      </div>
-
-      <h4 className={`font-semibold text-slate-900 leading-snug ${
-        card.url ? 'group-hover:text-indigo-600 transition-colors' : ''
-      }`}>
-        {card.title}
-        {card.url && (
-          <ExternalLink className="w-3 h-3 inline ml-1 opacity-0 group-hover:opacity-100 transition-opacity" />
-        )}
-      </h4>
-
-      <p className="text-sm text-slate-600 leading-relaxed flex-1">{renderSummaryWithLinks(card.summary)}</p>
-
-      {card.relevance && (
-        <p className="text-xs text-slate-400 italic border-t border-slate-100 pt-2 mt-auto">
-          {card.relevance}
-        </p>
-      )}
-    </div>
-  );
-
-  if (card.url) {
-    return (
-      <a href={card.url} target="_blank" rel="noopener noreferrer" className="block h-full">
-        {inner}
-      </a>
-    );
-  }
-  return inner;
-};
-
-const BasketResultCard: React.FC<{ result: BasketTickerResult; rank: number }> = ({ result, rank }) => {
-  const isUp = result.direction === 'up';
-  const [expanded, setExpanded] = useState(false);
-  const hasNews = result.news_cards && result.news_cards.length > 0;
-  
-  return (
-    <div className="bg-slate-50 rounded-xl overflow-hidden hover:bg-slate-100 transition-colors">
-      <div 
-        className="p-4 flex items-center gap-4 cursor-pointer"
-        onClick={() => setExpanded(!expanded)}
-      >
-        <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 font-bold text-sm ${
-          rank <= 3 ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-600'
-        }`}>
-          {rank}
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
-            <span className="font-bold text-slate-900">{result.ticker}</span>
-            {result.company_name && (
-              <span className="text-sm text-slate-500 truncate">{result.company_name}</span>
-            )}
-            {hasNews && (
-              <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-medium">
-                {result.news_cards.length} news
-              </span>
-            )}
-          </div>
-          {(result.sector || result.industry) && (
-            <div className="text-xs text-slate-400 mb-1">
-              {result.sector && <span>{result.sector}</span>}
-              {result.sector && result.industry && <span> • </span>}
-              {result.industry && <span>{result.industry}</span>}
-            </div>
-          )}
-          <div className="flex items-center gap-3 text-sm">
-            <span className="text-slate-500">
-              {result.start_price !== null ? `$${result.start_price.toFixed(2)}` : 'N/A'} → {result.end_price !== null ? `$${result.end_price.toFixed(2)}` : 'N/A'}
-            </span>
-          </div>
-        </div>
-        <div className={`text-right shrink-0`}>
-          <div className={`text-xl font-bold ${isUp ? 'text-emerald-600' : 'text-rose-600'}`}>
-            {result.total_change_pct !== null ? `${isUp ? '+' : ''}${result.total_change_pct.toFixed(1)}%` : 'N/A'}
-          </div>
-          <div className={`text-xs font-bold uppercase ${isUp ? 'text-emerald-500' : 'text-rose-500'}`}>
-            {result.direction}
-          </div>
-        </div>
-        <div className={`p-2 rounded-full transition-transform ${expanded ? 'rotate-180 bg-slate-200' : 'text-slate-400'}`}>
-          <ChevronDown className="w-5 h-5" />
-        </div>
-      </div>
-
-      {expanded && (
-        <div className="px-4 pb-4 border-t border-slate-200 pt-4">
-          <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-3">Related News</h4>
-          <div className="grid grid-cols-1 gap-3">
-            {hasNews ? (
-              result.news_cards.map((card, j) => (
-                <NewsCardItem key={j} card={card} />
-              ))
-            ) : (
-              <div className="bg-slate-50 p-4 rounded-xl text-center border border-dashed border-slate-200">
-                <p className="text-sm text-slate-400">No news articles found for this stock.</p>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
-
 export default App;
-
-// Collapsible Section Component
-interface CollapsibleSectionProps {
-  title: string;
-  icon: React.ComponentType<{ className?: string }>;
-  expanded: boolean;
-  onToggle: () => void;
-  children: React.ReactNode;
-  badge?: string;
-  className?: string;
-}
-
-const CollapsibleSection: React.FC<CollapsibleSectionProps> = ({ 
-  title, 
-  icon: Icon, 
-  expanded, 
-  onToggle, 
-  children, 
-  badge,
-  className = ''
-}) => {
-  return (
-    <div className={`bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden ${className}`}>
-      <button
-        onClick={onToggle}
-        className="w-full py-3 px-4 md:py-3 md:px-6 flex items-center justify-between gap-4 hover:bg-slate-50 transition-colors text-left"
-      >
-        <div className="flex items-center gap-3">
-          <Icon className="text-indigo-600 w-5 h-5" />
-          <h3 className="text-lg font-bold">{title}</h3>
-          {badge && (
-            <span className="text-xs font-normal text-slate-400 bg-slate-100 px-2.5 py-1 rounded-full">
-              {badge}
-            </span>
-          )}
-        </div>
-        <div className={`p-2 rounded-full transition-transform ${expanded ? 'rotate-180 bg-slate-100' : 'text-slate-400'}`}>
-          <ChevronDown className="w-5 h-5" />
-        </div>
-      </button>
-      {expanded && (
-        <div className="px-4 pb-6 md:px-6 md:pb-8 border-t border-slate-50 pt-6">
-          {children}
-        </div>
-      )}
-    </div>
-  );
-};
-

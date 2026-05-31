@@ -1,7 +1,5 @@
 import React from 'react';
 import {
-  PieChart,
-  Pie,
   Cell,
   BarChart,
   Bar,
@@ -11,32 +9,30 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from 'recharts';
-
-interface BasketTickerResult {
-  ticker: string;
-  company_name?: string;
-  sector?: string;
-  industry?: string;
-  start_price: number;
-  end_price: number;
-  total_change_pct: number;
-  direction: 'up' | 'down';
-  news_cards: any[];
-}
+import type { BasketTickerResult } from '../api';
 
 interface BasketAnalyticsProps {
   results: BasketTickerResult[];
 }
 
-interface PieLabelData {
-  name?: string;
-  percent?: number;
+// Custom tooltip components (defined outside to avoid recreation on render)
+interface IndustryData {
+  name: string;
+  value: number;
+  avgChange: number;
+  tickers: string[];
 }
 
-const COLORS = ['#4f46e5', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
+interface TooltipPayload {
+  payload: IndustryData;
+}
 
-// Custom tooltip components (defined outside to avoid recreation on render)
-const SectorTooltip = ({ active, payload }: { active?: boolean; payload?: any[] }) => {
+interface CustomTooltipProps {
+  active?: boolean;
+  payload?: TooltipPayload[];
+}
+
+const SectorTooltip = ({ active, payload }: CustomTooltipProps) => {
   if (active && payload && payload.length) {
     const data = payload[0].payload;
     return (
@@ -54,7 +50,7 @@ const SectorTooltip = ({ active, payload }: { active?: boolean; payload?: any[] 
   return null;
 };
 
-const SectorPerformanceTooltip = ({ active, payload }: { active?: boolean; payload?: any[] }) => {
+const SectorPerformanceTooltip = ({ active, payload }: CustomTooltipProps) => {
   if (active && payload && payload.length) {
     const data = payload[0].payload;
     const color = data.avgChange >= 0 ? '#10b981' : '#ef4444';
@@ -74,7 +70,18 @@ const SectorPerformanceTooltip = ({ active, payload }: { active?: boolean; paylo
   return null;
 };
 
-const PerformanceTooltip = ({ active, payload }: { active?: boolean; payload?: Array<{ payload: { ticker: string; change: number; direction: string } }> }) => {
+interface PerformanceData {
+  ticker: string;
+  change: number;
+  direction: 'up' | 'down';
+}
+
+interface PerformanceTooltipProps {
+  active?: boolean;
+  payload?: { payload: PerformanceData }[];
+}
+
+const PerformanceTooltip = ({ active, payload }: PerformanceTooltipProps) => {
   if (active && payload && payload.length) {
     const data = payload[0].payload;
     const color = data.direction === 'up' ? '#10b981' : '#ef4444';
@@ -98,25 +105,6 @@ const BasketAnalytics: React.FC<BasketAnalyticsProps> = ({ results }) => {
       </div>
     );
   }
-
-  // Group by sector
-  const sectorData = results.reduce((acc: Record<string, { sector: string; count: number; totalChange: number; tickers: string[] }>, result) => {
-    const sector = result.sector || 'Unknown';
-    if (!acc[sector]) {
-      acc[sector] = { sector, count: 0, totalChange: 0, tickers: [] };
-    }
-    acc[sector].count += 1;
-    acc[sector].totalChange += result.total_change_pct;
-    acc[sector].tickers.push(result.ticker);
-    return acc;
-  }, {});
-
-  const sectorArray = Object.values(sectorData).map((s) => ({
-    name: s.sector,
-    value: s.count,
-    avgChange: s.count > 0 ? s.totalChange / s.count : 0,
-    tickers: s.tickers,
-  }));
 
   // Group by industry
   const industryData = results.reduce((acc: Record<string, { industry: string; count: number; totalChange: number; tickers: string[] }>, result) => {
@@ -149,55 +137,6 @@ const BasketAnalytics: React.FC<BasketAnalyticsProps> = ({ results }) => {
 
   return (
     <div className="space-y-8">
-      {/* Sector Breakdown */}
-      <div>
-        <h3 className="text-lg font-semibold text-slate-900 mb-4">Sector Breakdown</h3>
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <ResponsiveContainer width="100%" height={300}>
-            <PieChart>
-              <Pie
-                data={sectorArray}
-                cx="50%"
-                cy="50%"
-                labelLine={false}
-                label={({ name, percent }: PieLabelData) => `${name} ${((percent ?? 0) * 100).toFixed(0)}%`}
-                outerRadius={80}
-                fill="#8884d8"
-                dataKey="value"
-              >
-                {sectorArray.map((_, index) => (
-                  <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                ))}
-              </Pie>
-              <Tooltip content={<SectorTooltip />} />
-            </PieChart>
-          </ResponsiveContainer>
-          <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={sectorArray}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-              <XAxis
-                dataKey="name"
-                stroke="#64748b"
-                fontSize={12}
-                tickLine={false}
-                axisLine={false}
-                angle={-45}
-                textAnchor="end"
-                height={80}
-              />
-              <YAxis
-                stroke="#64748b"
-                fontSize={12}
-                tickLine={false}
-                axisLine={false}
-              />
-              <Tooltip content={<SectorTooltip />} />
-              <Bar dataKey="value" fill="#4f46e5" radius={[2, 2, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-
       {/* Industry Breakdown */}
       {industryArray.length > 0 && (
         <div>
@@ -227,45 +166,6 @@ const BasketAnalytics: React.FC<BasketAnalyticsProps> = ({ results }) => {
           </ResponsiveContainer>
         </div>
       )}
-
-      {/* Sector Performance */}
-      <div>
-        <h3 className="text-lg font-semibold text-slate-900 mb-4">Sector Performance</h3>
-        <ResponsiveContainer width="100%" height={300}>
-          <BarChart data={sectorArray}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-            <XAxis
-              dataKey="name"
-              stroke="#64748b"
-              fontSize={12}
-              tickLine={false}
-              axisLine={false}
-              angle={-45}
-              textAnchor="end"
-              height={80}
-            />
-            <YAxis
-              stroke="#64748b"
-              fontSize={12}
-              tickLine={false}
-              axisLine={false}
-              tickFormatter={(value) => `${value.toFixed(0)}%`}
-            />
-            <Tooltip content={<SectorPerformanceTooltip />} />
-            <Bar
-              dataKey="avgChange"
-              radius={[2, 2, 0, 0]}
-            >
-              {sectorArray.map((entry, index) => (
-                <Cell 
-                  key={`sector-perf-${index}`} 
-                  fill={entry.avgChange >= 0 ? '#10b981' : '#ef4444'} 
-                />
-              ))}
-            </Bar>
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
 
       {/* Industry Performance */}
       {industryArray.length > 0 && (

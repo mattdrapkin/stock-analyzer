@@ -49,6 +49,24 @@ def _parse_basket_news_cards_from_response(content: str) -> Dict[str, List[Dict]
         text = re.sub(r'\n?```$', '', text)
         text = text.strip()
 
+    # First, try to fix truncated JSON by closing incomplete structures
+    # Count braces and brackets to determine what's missing
+    open_braces = text.count('{')
+    close_braces = text.count('}')
+    open_brackets = text.count('[')
+    close_brackets = text.count(']')
+    
+    # Add missing closing brackets and braces
+    text += ']' * (open_brackets - close_brackets)
+    text += '}' * (open_braces - close_braces)
+    
+    # Also handle case where a string is left open (truncated mid-string)
+    # Find the last quote and check if it's properly closed
+    if text.count('"') % 2 != 0:
+        # Odd number of quotes means a string is unclosed
+        # Add a closing quote
+        text += '"'
+    
     # Try to extract valid JSON by progressively truncating from the end
     # This handles cases where OpenAI truncates the response mid-JSON
     original_length = len(text)

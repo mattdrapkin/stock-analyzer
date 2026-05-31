@@ -11,6 +11,7 @@ import {
   BarChart,
   Bar,
 } from 'recharts';
+import type { NewsCard } from '../api';
 
 interface PriceDataPoint {
   date: string;
@@ -23,6 +24,7 @@ interface PriceDataPoint {
 
 interface StockChartProps {
   data: PriceDataPoint[];
+  newsCards?: NewsCard[];
 }
 
 interface ChartDataPoint extends PriceDataPoint {
@@ -32,44 +34,106 @@ interface ChartDataPoint extends PriceDataPoint {
   percentChange: number;
 }
 
-// Custom dot component for big mover days
-const BigMoverDot = (props: any) => {
-  const { cx, cy, payload } = props;
+interface BigMoverDotProps {
+  cx?: number;
+  cy?: number;
+  payload?: ChartDataPoint;
+  newsCards?: NewsCard[];
+}
+
+// Custom dot component for big mover days with news annotations
+const BigMoverDot = (props: BigMoverDotProps) => {
+  const { cx, cy, payload, newsCards } = props;
   const percentChange = payload?.percentChange || 0;
   const isBigMover = Math.abs(percentChange) >= 3;
 
   if (!isBigMover) return null;
 
+  // Find news cards for this date
+  const dateStr = payload?.date;
+  const relevantNews = newsCards?.filter((card: NewsCard) => card.date === dateStr) || [];
+  const hasNews = relevantNews.length > 0;
+
   return (
-    <circle
-      cx={cx}
-      cy={cy}
-      r={4}
-      fill={percentChange > 0 ? '#10b981' : '#ef4444'}
-      stroke="#fff"
-      strokeWidth={1.5}
-    />
+    <g className={hasNews ? 'cursor-pointer' : ''}>
+      <circle
+        cx={cx}
+        cy={cy}
+        r={hasNews ? 6 : 4}
+        fill={percentChange > 0 ? '#10b981' : '#ef4444'}
+        stroke="#fff"
+        strokeWidth={1.5}
+      />
+      {hasNews && (
+        <circle
+          cx={cx}
+          cy={cy}
+          r={8}
+          fill="none"
+          stroke={percentChange > 0 ? '#10b981' : '#ef4444'}
+          strokeWidth={2}
+          strokeDasharray="2 2"
+        />
+      )}
+    </g>
   );
 };
 
+interface CustomTooltipProps {
+  active?: boolean;
+  payload?: Array<{ payload: ChartDataPoint; color: string; name: string; value: number }>;
+  label?: string;
+  newsCards?: NewsCard[];
+}
+
 // Custom tooltip components (defined outside to avoid recreation on render)
-const CustomTooltip = ({ active, payload, label }: any) => {
+const CustomTooltip = ({ active, payload, label, newsCards }: CustomTooltipProps) => {
   if (active && payload && payload.length) {
+    const dateStr = payload[0]?.payload?.date;
+    const relevantNews = newsCards?.filter((card: NewsCard) => card.date === dateStr) || [];
+
     return (
-      <div className="bg-white p-3 rounded-lg shadow-lg border border-slate-200">
+      <div className="bg-white p-3 rounded-lg shadow-lg border border-slate-200 max-w-sm">
         <p className="text-sm font-medium text-slate-900 mb-2">{label}</p>
-        {payload.map((entry: any, index: number) => (
+        {payload.map((entry, index: number) => (
           <p key={index} className="text-sm" style={{ color: entry.color }}>
             {entry.name}: ${entry.value.toFixed(2)}
           </p>
         ))}
+        {relevantNews.length > 0 && (
+          <div className="mt-3 pt-3 border-t border-slate-200">
+            <p className="text-xs font-semibold text-slate-700 mb-2">
+              {relevantNews.length} News Event{relevantNews.length > 1 ? 's' : ''}
+            </p>
+            {relevantNews.slice(0, 2).map((card: NewsCard, idx: number) => (
+              <div key={idx} className="mb-2 last:mb-0">
+                <p className="text-xs font-medium text-slate-900 line-clamp-1">{card.title}</p>
+                <p className="text-xs text-slate-600 line-clamp-2">{card.summary}</p>
+                {card.source_name && (
+                  <p className="text-xs text-slate-500 mt-1">{card.source_name}</p>
+                )}
+              </div>
+            ))}
+            {relevantNews.length > 2 && (
+              <p className="text-xs text-slate-500 mt-1">
+                +{relevantNews.length - 2} more article{relevantNews.length > 3 ? 's' : ''}
+              </p>
+            )}
+          </div>
+        )}
       </div>
     );
   }
   return null;
 };
 
-const VolumeTooltip = ({ active, payload, label }: any) => {
+interface VolumeTooltipProps {
+  active?: boolean;
+  payload?: Array<{ value: number }>;
+  label?: string;
+}
+
+const VolumeTooltip = ({ active, payload, label }: VolumeTooltipProps) => {
   if (active && payload && payload.length) {
     return (
       <div className="bg-white p-3 rounded-lg shadow-lg border border-slate-200">
@@ -83,7 +147,7 @@ const VolumeTooltip = ({ active, payload, label }: any) => {
   return null;
 };
 
-const StockChart: React.FC<StockChartProps> = ({ data }) => {
+const StockChart: React.FC<StockChartProps> = ({ data, newsCards = [] }) => {
   if (!data || data.length === 0) {
     return (
       <div className="flex items-center justify-center h-64 bg-slate-50 rounded-lg">
@@ -138,7 +202,7 @@ const StockChart: React.FC<StockChartProps> = ({ data }) => {
               tickFormatter={(value) => `$${value.toFixed(0)}`}
               domain={['auto', 'auto']}
             />
-            <Tooltip content={<CustomTooltip />} />
+            <Tooltip content={<CustomTooltip newsCards={newsCards} />} />
             <Legend />
             <Line
               type="monotone"
@@ -147,7 +211,7 @@ const StockChart: React.FC<StockChartProps> = ({ data }) => {
               strokeWidth={2}
               dot={false}
               name="Close Price"
-              activeDot={<BigMoverDot />}
+              activeDot={<BigMoverDot newsCards={newsCards} />}
             />
             {dataWithMA.some((d) => d.ma20 !== null) && (
               <Line
