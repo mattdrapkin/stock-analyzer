@@ -2,7 +2,7 @@
 
 ## Overview
 
-The stock analyzer has been redesigned to use **OpenAI's Chat Completions API with search-enabled models** instead of NewsAPI. This provides several key advantages:
+The stock analyzer has been redesigned to use **OpenAI's Responses API with web_search tool** instead of NewsAPI. This provides several key advantages:
 
 ### Benefits
 
@@ -11,6 +11,8 @@ The stock analyzer has been redesigned to use **OpenAI's Chat Completions API wi
 3. **Real-Time Data**: Access to up-to-date information from the internet, not limited to a specific news API's coverage
 4. **Better Context**: The AI can analyze and summarize news in the context of stock movements
 5. **Simplified Dependencies**: No need for separate NewsAPI key
+6. **Rate Limit Resilience**: Exponential backoff retry logic prevents tight retry loops
+7. **Optimized Batching**: One API call per basket (not per stock) reduces rate limit pressure
 
 ## Architecture Changes
 
@@ -19,10 +21,19 @@ The stock analyzer has been redesigned to use **OpenAI's Chat Completions API wi
 User Request → NewsAPI Search → Raw Articles → Manual Filtering → Response
 ```
 
-### After (OpenAI Web Search)
+### After (OpenAI Responses API with web_search)
 ```
-User Request → OpenAI Chat Completions → Search Model → AI Summary + Citations → Response
+User Request → Responses API → web_search tool → AI Summary + Citations → Response
+                      ↓
+              Exponential Backoff Retry
+                      ↓
+              Rate Limiter (token bucket)
 ```
+
+**Key Configuration:**
+- `model="gpt-5.5"` - Recommended model for new integrations
+- `tools=[{"type": "web_search", "search_context_size": "medium"}]` - Enables web search
+- `tool_choice="required"` - Ensures web search is always performed for news fetching
 
 ## Key Components
 
@@ -63,7 +74,7 @@ class StockMovement(BaseModel):
 ```python
 def _search_with_openai(search_prompt: str, category: str) -> Tuple[str, List[str], List[str]]:
     """
-    Use OpenAI Chat Completions API with search-enabled model to find news.
+    Use OpenAI Responses API with web_search tool to find news.
     
     Returns:
         Tuple of (ai_summary, sources, search_queries)
@@ -72,8 +83,10 @@ def _search_with_openai(search_prompt: str, category: str) -> Tuple[str, List[st
 
 **Search Configuration:**
 
-- **Model**: `gpt-5-search-api` (configurable via `OPENAI_SEARCH_MODEL`)
-- **API**: Chat Completions with search-enabled model
+- **Model**: `gpt-5.5` (configurable via `OPENAI_SEARCH_MODEL`)
+- **API**: Responses API with `web_search` tool
+- **Tool Configuration**: `{"type": "web_search", "search_context_size": "medium"}`
+- **Tool Choice**: `auto` (model decides when to search)
 - **Temperature**: 0.3 for consistent, factual responses
 - **Source Extraction**: Parses URLs from AI response using regex
 
@@ -101,6 +114,35 @@ Updated to handle both formats:
 - **Web Search Results**: Displays AI summaries with source URLs
 - **Mock Data**: Displays individual articles (backward compatible)
 
+### 5. Rate Limit Utils (`app/rate_limit_utils.py`)
+
+**New Function:**
+
+```python
+def retry_with_exponential_backoff(
+    func,
+    max_retries: int = 5,
+    initial_delay: float = 1.0,
+    max_delay: float = 60.0,
+    backoff_factor: float = 2.0,
+    rate_limiter=None,
+):
+    """
+    Execute a function with exponential backoff retry logic for rate limit errors.
+    
+    Follows OpenAI's recommendation:
+    - Respects suggested wait times from error messages
+    - Uses exponential backoff with jitter to avoid thundering herd
+    - Non-rate-limit errors are raised immediately
+    """
+```
+
+**Features:**
+- Extracts suggested wait times from OpenAI error messages
+- Falls back to exponential backoff with jitter if no suggestion
+- Integrates with token bucket rate limiter
+- Configurable retry limits and delays
+
 ## Configuration
 
 ### Environment Variables
@@ -110,10 +152,18 @@ Updated to handle both formats:
 OPENAI_API_KEY=your_openai_key_here
 
 # Optional - model for web search (default: gpt-5.5)
+# Recommended: gpt-5.5 for new integrations with Responses API + web_search tool
 OPENAI_SEARCH_MODEL=gpt-5.5
+
+# Optional - search context size (default: medium)
+# Options: low, medium, high
+OPENAI_SEARCH_CONTEXT_SIZE=medium
 
 # Optional - model for chat (default: gpt-5.4-nano)
 OPENAI_MODEL=gpt-5.4-nano
+
+# Optional - max requests per minute (default: 50)
+OPENAI_MAX_RPM=50
 ```
 
 ### Removed Variables
@@ -180,18 +230,21 @@ curl "http://localhost:8000/api/v1/analysis/AAPL?include_macro=true"
 
 ### From the Documentation
 
-1. **Non-reasoning web search**: Fast lookups for company-specific news
-2. **Search context size**: Set to "medium" for balanced detail
-3. **Sources field**: Returns complete list of URLs consulted
-4. **Inline citations**: AI summary includes references to sources
+1. **Responses API with web_search tool**: Modern endpoint for web search integrations
+2. **gpt-5.5 model**: Recommended model for new web search integrations
+3. **Tool choice: auto**: Model decides when to use web search based on the query
+4. **Search context size**: Configurable (low/medium/high) for controlling search depth
+5. **Exponential backoff retry**: Follows OpenAI's recommendation for rate limit handling
+6. **Batch requests**: One API call per basket (not per stock) to reduce rate limit pressure
 
 ### Not Currently Used (Future Enhancements)
 
 - Domain filtering (`filters.allowed_domains` / `filters.blocked_domains`)
 - User location for geo-specific results
-- Deep research mode (`gpt-5.5` with `high` or `xhigh` reasoning)
+- Deep research mode with higher reasoning levels
 - Return token budget control for extended research
 - Live internet access control (`external_web_access`)
+- Tool choice: "required" (if search must always be used)
 
 ## Cost Considerations
 
@@ -206,6 +259,9 @@ curl "http://localhost:8000/api/v1/analysis/AAPL?include_macro=true"
 1. **Cache aggressively**: The default 30-minute cache helps reduce redundant searches
 2. **Limit categories**: Only enable `include_competitors` and `include_macro` when needed
 3. **Batch requests**: Analyze multiple movements in a single API call when possible
+4. **Adjust search context size**: Use "low" for quick lookups, "medium" for balanced results, "high" for comprehensive research
+5. **Rate limiting**: Configure `OPENAI_MAX_RPM` to prevent hitting API limits
+6. **Exponential backoff**: Automatic retry with backoff handles transient rate limit errors
 
 ## Backward Compatibility
 

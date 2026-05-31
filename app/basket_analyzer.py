@@ -14,14 +14,15 @@ from openai import OpenAI, OpenAIError
 
 from .models import BasketAnalysisResponse, BasketTickerResult, NewsCard
 from .stock_data import fetch_price_history, get_ticker_info
-from .news_fetcher import fetch_batch_news_for_period, has_openai_key, RateLimitError
-from .rate_limit_utils import is_rate_limit_error, create_rate_limit_error, get_rate_limiter
+from .news_fetcher import fetch_batch_news_for_period, has_openai_key, RateLimitError, _extract_from_response
+from .rate_limit_utils import is_rate_limit_error, create_rate_limit_error, get_rate_limiter, retry_with_exponential_backoff
 
 logger = logging.getLogger(__name__)
 
 OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-OPENAI_SEARCH_MODEL: str = os.getenv("OPENAI_SEARCH_MODEL", "gpt-5-search-api")
+OPENAI_SEARCH_MODEL: str = os.getenv("OPENAI_SEARCH_MODEL", "gpt-5.5")
 OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-5.4-nano")
+OPENAI_SEARCH_CONTEXT_SIZE: str = os.getenv("OPENAI_SEARCH_CONTEXT_SIZE", "medium")
 
 # Configurable limit for news fetching on biggest movers
 BASKET_NEWS_TOP_N: int = int(os.getenv("BASKET_NEWS_TOP_N", "10"))
@@ -146,7 +147,7 @@ def fetch_basket_news_batch(
     prioritize: bool = False,
 ) -> Dict[str, List[NewsCard]]:
     """
-    Fetch news for multiple tickers in a single batch OpenAI call.
+    Fetch news for multiple tickers in a single batch OpenAI call using Responses API with web_search tool.
     
     Args:
         ticker_info: List of dicts with 'ticker' and 'company_name' keys
@@ -167,10 +168,6 @@ def fetch_basket_news_batch(
         return {}
 
     try:
-        # Apply rate limiting before making the API call
-        rate_limiter = get_rate_limiter()
-        rate_limiter.wait_if_needed()
-        
         client = OpenAI(api_key=OPENAI_API_KEY)
 
         # Build prompt with all tickers
@@ -197,16 +194,34 @@ def fetch_basket_news_batch(
             f"2-3 articles per ticker. 50%+ coverage."
         )
 
-        response = client.chat.completions.create(
-            model=OPENAI_SEARCH_MODEL,
-            messages=[
-                {"role": "system", "content": BASKET_NEWS_SYSTEM_PROMPT},
-                {"role": "user", "content": prompt},
-            ],
-        )
+        # Use exponential backoff retry with rate limiting
+        rate_limiter = get_rate_limiter()
+        
+        def make_api_call():
+            # Use Responses API with web_search tool
+            result = client.responses.create(
+                model=OPENAI_SEARCH_MODEL,
+                instructions=BASKET_NEWS_SYSTEM_PROMPT,
+                input=prompt,
+                tools=[{"type": "web_search", "search_context_size": OPENAI_SEARCH_CONTEXT_SIZE}],
+                tool_choice="required",  # Require web search for news fetching
+            )
+            return result
 
-        content = response.choices[0].message.content or ""
-        logger.info(f"OpenAI response (first 300 chars): {content[:300]}")
+        try:
+            response = retry_with_exponential_backoff(
+                make_api_call,
+                max_retries=5,
+                initial_delay=1.0,
+                max_delay=60.0,
+                rate_limiter=rate_limiter,
+            )
+        except Exception as e:
+            logger.error(f"Error during API call: {e}")
+            raise
+
+        content, _, _ = _extract_from_response(response)
+        logger.debug(f"Basket news response length: {len(content)}")
         raw_news_dict = _parse_basket_news_cards_from_response(content)
         
         # Convert to NewsCard objects
@@ -345,24 +360,33 @@ IMPORTANT: This is a web application interface, not a conversational chat. Never
 """
     
     try:
-        # Apply rate limiting before making the API call
-        rate_limiter = get_rate_limiter()
-        rate_limiter.wait_if_needed()
-        
         client = OpenAI(api_key=OPENAI_API_KEY)
-        completion = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are an expert financial analyst. Provide concise, insightful summaries of basket performance based on news and price data. IMPORTANT: This is a web application interface, not a conversational chat. Never offer follow-up actions, suggest what the user can do next, or ask if they want additional information. Provide a complete, self-contained response."
-                },
-                {
-                    "role": "user",
-                    "content": context
-                }
-            ],
-            temperature=0.3,
+        
+        # Use exponential backoff retry with rate limiting
+        rate_limiter = get_rate_limiter()
+        
+        def make_api_call():
+            return client.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are an expert financial analyst. Provide concise, insightful summaries of basket performance based on news and price data. IMPORTANT: This is a web application interface, not a conversational chat. Never offer follow-up actions, suggest what the user can do next, or ask if they want additional information. Provide a complete, self-contained response."
+                    },
+                    {
+                        "role": "user",
+                        "content": context
+                    }
+                ],
+                temperature=0.3,
+            )
+
+        completion = retry_with_exponential_backoff(
+            make_api_call,
+            max_retries=5,
+            initial_delay=1.0,
+            max_delay=60.0,
+            rate_limiter=rate_limiter,
         )
         
         summary = completion.choices[0].message.content or ""

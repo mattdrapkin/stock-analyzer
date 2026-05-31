@@ -5,6 +5,7 @@ Utility functions for handling OpenAI API rate limit errors.
 import os
 import re
 import logging
+import random
 import time
 import threading
 from typing import Optional, Dict, Any
@@ -242,3 +243,89 @@ def create_rate_limit_error(error: OpenAIError) -> RateLimitError:
         limit_type=details['limit_type'],
         wait_time=details['wait_time']
     )
+
+
+def retry_with_exponential_backoff(
+    func,
+    max_retries: int = 5,
+    initial_delay: float = 1.0,
+    max_delay: float = 60.0,
+    backoff_factor: float = 2.0,
+    rate_limiter=None,
+) -> Any:
+    """
+    Execute a function with exponential backoff retry logic for rate limit errors.
+    
+    This follows OpenAI's recommendation for handling rate limits:
+    - Unsuccessful requests still count toward per-minute limits
+    - Exponential backoff prevents tight retry loops
+    - Respects suggested wait times from error messages when available
+    
+    Args:
+        func: The function to execute (should return the result)
+        max_retries: Maximum number of retry attempts (default: 5)
+        initial_delay: Initial delay in seconds before first retry (default: 1.0)
+        max_delay: Maximum delay between retries (default: 60.0)
+        backoff_factor: Multiplier for exponential backoff (default: 2.0)
+        rate_limiter: Optional RateLimiter instance to apply before each attempt
+    
+    Returns:
+        The result of the function call
+    
+    Raises:
+        The original exception if max retries are exceeded
+    """
+    import random
+    
+    last_exception = None
+    delay = initial_delay
+    
+    for attempt in range(max_retries + 1):
+        try:
+            # Apply rate limiter if provided
+            if rate_limiter:
+                rate_limiter.wait_if_needed()
+            
+            # Execute the function
+            logger.debug(f"retry_with_exponential_backoff: Attempt {attempt + 1}/{max_retries + 1}")
+            result = func()
+            logger.debug(f"retry_with_exponential_backoff: Function returned, type: {type(result)}")
+            return result
+            
+        except Exception as e:
+            last_exception = e
+            
+            # Log all exceptions for debugging
+            logger.error(f"Exception in retry_with_exponential_backoff on attempt {attempt + 1}/{max_retries + 1}: {e}", exc_info=True)
+            
+            # Only retry on rate limit errors
+            if not isinstance(e, OpenAIError) or not is_rate_limit_error(e):
+                logger.error(f"Non-rate-limit error, raising immediately")
+                raise
+            
+            # If this was the last attempt, raise the rate limit error
+            if attempt == max_retries:
+                logger.error(f"Max retries ({max_retries}) exceeded for rate limit error: {e}")
+                raise create_rate_limit_error(e) from e
+            
+            # Extract suggested wait time from error if available
+            suggested_wait = extract_wait_time(e)
+            if suggested_wait:
+                # Use the suggested wait time, capped at max_delay
+                actual_wait = min(suggested_wait, max_delay)
+                logger.info(f"Rate limit hit on attempt {attempt + 1}/{max_retries + 1}. Using suggested wait time: {actual_wait:.1f}s")
+            else:
+                # Use exponential backoff with jitter
+                jitter = random.uniform(0.8, 1.2)  # Add 20% jitter to avoid thundering herd
+                actual_wait = min(delay * jitter, max_delay)
+                logger.info(f"Rate limit hit on attempt {attempt + 1}/{max_retries + 1}. Waiting {actual_wait:.1f}s (exponential backoff)")
+            
+            # Wait before retry
+            time.sleep(actual_wait)
+            
+            # Increase delay for next attempt (exponential backoff)
+            delay = min(delay * backoff_factor, max_delay)
+    
+    # This should never be reached, but just in case
+    if last_exception:
+        raise last_exception

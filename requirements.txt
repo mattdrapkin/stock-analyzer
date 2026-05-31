@@ -1,7 +1,7 @@
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
 yfinance>=0.2.56
-openai==1.65.4
+openai==2.38.0
 httpx==0.28.1
 pandas==2.2.3
 python-dotenv==1.0.1

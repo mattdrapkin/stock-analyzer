@@ -20,12 +20,13 @@ from typing import List, Dict, Optional, Tuple
 
 from openai import OpenAI, OpenAIError
 
-from .rate_limit_utils import RateLimitError, is_rate_limit_error, create_rate_limit_error, get_rate_limiter
+from .rate_limit_utils import RateLimitError, is_rate_limit_error, create_rate_limit_error, get_rate_limiter, retry_with_exponential_backoff
 
 logger = logging.getLogger(__name__)
 
 OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-OPENAI_SEARCH_MODEL: str = os.getenv("OPENAI_SEARCH_MODEL", "gpt-5-search-api")
+OPENAI_SEARCH_MODEL: str = os.getenv("OPENAI_SEARCH_MODEL", "gpt-5.5")
+OPENAI_SEARCH_CONTEXT_SIZE: str = os.getenv("OPENAI_SEARCH_CONTEXT_SIZE", "medium")
 
 # How many days before / after a movement to search for news
 DEFAULT_DAYS_BEFORE = 2
@@ -201,7 +202,54 @@ def _build_macro_search_prompt(
     )
 
 
-# ── OpenAI Chat Completions with web search ────────────────────────────────────
+# ── Responses API output parsing ─────────────────────────────────────────────
+
+def _extract_from_response(response) -> Tuple[str, List[str], List[str]]:
+    """
+    Parse a Responses API response object.
+
+    The output list contains two item types (per API docs):
+      - web_search_call  → exposes the search query via action.query
+      - message          → contains assistant text (output_text) and
+                           url_citation annotations
+
+    Returns:
+        Tuple of (text, source_urls, search_queries)
+    """
+    text = ""
+    source_urls: List[str] = []
+    search_queries: List[str] = []
+
+    if not hasattr(response, "output") or not response.output:
+        return text, source_urls, search_queries
+
+    for item in response.output:
+        item_type = getattr(item, "type", None)
+
+        if item_type == "web_search_call":
+            action = getattr(item, "action", None)
+            if action:
+                query = getattr(action, "query", None)
+                if query:
+                    search_queries.append(query)
+
+        elif item_type == "message":
+            content_list = getattr(item, "content", None) or []
+            for block in content_list:
+                if getattr(block, "type", None) == "output_text":
+                    text = getattr(block, "text", "") or ""
+                    for ann in (getattr(block, "annotations", None) or []):
+                        if getattr(ann, "type", None) == "url_citation":
+                            url = getattr(ann, "url", None)
+                            if url:
+                                source_urls.append(url)
+
+    source_urls = list(dict.fromkeys(source_urls))      # deduplicate, preserve order
+    search_queries = list(dict.fromkeys(search_queries))
+    return text, source_urls, search_queries
+
+
+# ── OpenAI Responses API web search ───────────────────────────────────────────
 
 def _batch_search_with_openai(
     company_name: str,
@@ -213,7 +261,7 @@ def _batch_search_with_openai(
     movement_dates: Optional[List[date]] = None,
 ) -> List[Dict]:
     """
-    Perform a single structured batch web search for a ticker across the entire date range.
+    Perform a single structured batch web search for a ticker across the entire date range using Responses API.
 
     Returns:
         List of news card dicts with keys: title, summary, date, source_name, url, category, relevance
@@ -223,10 +271,6 @@ def _batch_search_with_openai(
         return []
 
     try:
-        # Apply rate limiting before making the API call
-        rate_limiter = get_rate_limiter()
-        rate_limiter.wait_if_needed()
-        
         client = OpenAI(api_key=OPENAI_API_KEY)
 
         categories = [
@@ -263,15 +307,29 @@ def _batch_search_with_openai(
 
         prompt = " ".join(prompt_parts)
 
-        response = client.chat.completions.create(
-            model=OPENAI_SEARCH_MODEL,
-            messages=[
-                {"role": "system", "content": STRUCTURED_NEWS_SYSTEM_PROMPT},
-                {"role": "user", "content": prompt},
-            ],
+        # Use exponential backoff retry with rate limiting
+        rate_limiter = get_rate_limiter()
+        
+        def make_api_call():
+            # Use Responses API with web_search tool
+            result = client.responses.create(
+                model=OPENAI_SEARCH_MODEL,
+                instructions=STRUCTURED_NEWS_SYSTEM_PROMPT,
+                input=prompt,
+                tools=[{"type": "web_search", "search_context_size": OPENAI_SEARCH_CONTEXT_SIZE}],
+                tool_choice="required",  # Require web search for news fetching
+            )
+            return result
+
+        response = retry_with_exponential_backoff(
+            make_api_call,
+            max_retries=5,
+            initial_delay=1.0,
+            max_delay=60.0,
+            rate_limiter=rate_limiter,
         )
 
-        content = response.choices[0].message.content or ""
+        content, _, _ = _extract_from_response(response)
         cards = _parse_news_cards_from_response(content)
         logger.debug(f"Structured batch search returned {len(cards)} news cards for {ticker}")
         return cards
@@ -292,7 +350,7 @@ def _search_with_openai(
     category: str,
 ) -> Tuple[str, List[str], List[str]]:
     """
-    Use OpenAI Chat Completions API with search-enabled model to find news.
+    Use OpenAI Responses API with web_search tool to find news.
     
     Returns:
         Tuple of (ai_summary, sources, search_queries)
@@ -302,40 +360,32 @@ def _search_with_openai(
         return ("", [], [])
 
     try:
-        # Apply rate limiting before making the API call
-        rate_limiter = get_rate_limiter()
-        rate_limiter.wait_if_needed()
-        
         client = OpenAI(api_key=OPENAI_API_KEY)
         
-        # Use Chat Completions with search-enabled model
-        # Search-enabled models automatically perform web search and include citations
-        response = client.chat.completions.create(
-            model=OPENAI_SEARCH_MODEL,
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are a financial research assistant. Search for and summarize relevant news articles. Always include direct source URLs in your response. IMPORTANT: This is a web application interface, not a conversational chat. Never offer follow-up actions, suggest what the user can do next, or ask if they want additional information. Provide a complete, self-contained response."
-                },
-                {
-                    "role": "user",
-                    "content": search_prompt
-                }
-            ],
+        # Use exponential backoff retry with rate limiting
+        rate_limiter = get_rate_limiter()
+        
+        def make_api_call():
+            # Use Responses API with web_search tool
+            system_prompt = "You are a financial research assistant. Search for and summarize relevant news articles. Always include direct source URLs in your response. IMPORTANT: This is a web application interface, not a conversational chat. Never offer follow-up actions, suggest what the user can do next, or ask if they want additional information. Provide a complete, self-contained response."
+            result = client.responses.create(
+                model=OPENAI_SEARCH_MODEL,
+                instructions=system_prompt,
+                input=search_prompt,
+                tools=[{"type": "web_search", "search_context_size": OPENAI_SEARCH_CONTEXT_SIZE}],
+                tool_choice="required",  # Require web search for news fetching
+            )
+            return result
+
+        response = retry_with_exponential_backoff(
+            make_api_call,
+            max_retries=5,
+            initial_delay=1.0,
+            max_delay=60.0,
+            rate_limiter=rate_limiter,
         )
 
-        ai_summary = response.choices[0].message.content or ""
-
-        # Extract sources from the response if available
-        sources = []
-        search_queries = []
-
-        # Search models typically include citations in the response
-        # We'll parse URLs from the summary as a fallback
-        url_pattern = r'https?://[^\s<>"{}|\\^`\[\]]+'
-        urls = re.findall(url_pattern, ai_summary)
-        sources = list(set(urls))  # Deduplicate
-        
+        ai_summary, sources, search_queries = _extract_from_response(response)
         logger.debug(f"Web search for {category}: found {len(sources)} sources")
         return (ai_summary, sources, search_queries)
         
