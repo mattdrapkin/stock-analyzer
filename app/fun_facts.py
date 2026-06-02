@@ -41,8 +41,6 @@ def generate_fun_facts(request: FunFactsRequest) -> FunFactsResponse:
     Generate fun facts about a ticker or basket using OpenAI.
     """
     logger.info(f"Generating fun facts for request: {request}")
-    logger.info(f"OpenAI API key configured: {bool(OPENAI_API_KEY)}")
-    logger.info(f"Using model: {OPENAI_MODEL}")
 
     if not has_openai_key():
         logger.warning("No OpenAI API key configured, using fallback facts")

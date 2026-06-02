@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, model_validator
-from typing import Optional, List
+from typing import Dict, Optional, List
 from datetime import date, datetime
 from enum import Enum
 
@@ -132,6 +132,38 @@ class BasketAnalysisResponse(BaseModel):
     holistic_summary: Optional[str] = None  # AI-generated summary of basket movement drivers
     news_source: str = "None"  # Which news source was used (OpenAI, Mock, None)
     basket_name: Optional[str] = None  # Name of the default basket if applicable
+
+
+class BasketEnrichRequest(BaseModel):
+    tickers: List[str]
+    start_date: date
+    end_date: date
+    results: List[BasketTickerResult]
+    include_competitors: bool = False
+    include_macro: bool = False
+    basket_name: Optional[str] = None
+
+    @model_validator(mode='after')
+    def validate_consistency(self):
+        if not self.results:
+            raise ValueError("At least one result is required")
+        result_tickers = {r.ticker for r in self.results}
+        request_tickers = set(self.tickers)
+        if result_tickers != request_tickers:
+            raise ValueError("Tickers in results must match tickers list")
+        if self.start_date > self.end_date:
+            raise ValueError("start_date must be before end_date")
+        return self
+
+
+class BasketEnrichResponse(BaseModel):
+    ticker_news: Dict[str, List[NewsCard]]
+    holistic_summary: Optional[str] = None
+
+
+class TickerNewsResponse(BaseModel):
+    ticker: str
+    batch_news_cards: List[NewsCard]
 
 
 class FunFactsRequest(BaseModel):

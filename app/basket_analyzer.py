@@ -6,7 +6,7 @@ import json
 import logging
 import os
 from datetime import date
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 from openai import OpenAIError
@@ -367,6 +367,74 @@ IMPORTANT: This is a web application interface, not a conversational chat. Never
     except Exception as e:
         logger.error(f"Unexpected error generating basket holistic summary: {e}")
         return None
+
+
+def enrich_basket(
+    results: List[BasketTickerResult],
+    start_date: date,
+    end_date: date,
+    include_competitors: bool = False,
+    include_macro: bool = False,
+    basket_name: Optional[str] = None,
+) -> Tuple[Dict[str, List[NewsCard]], Optional[str]]:
+    """
+    AI-powered enrichment for already-computed basket results.
+
+    Fetches news and generates a holistic summary without re-fetching price data.
+    Intended to be called in the background after the fast price-data phase.
+
+    Returns:
+        Tuple of (ticker_news_dict, holistic_summary)
+    """
+    if not has_openai_key():
+        logger.debug("OpenAI API key not configured, skipping basket enrichment")
+        return {}, None
+
+    if not results:
+        return {}, None
+
+    ticker_info_list = [
+        {"ticker": r.ticker, "company_name": r.company_name or r.ticker}
+        for r in results
+    ]
+
+    top_n = min(BASKET_NEWS_MAX_BATCH_SIZE, len(results))
+
+    try:
+        batch_news = fetch_basket_news_batch(
+            ticker_info=ticker_info_list[:top_n],
+            from_date=start_date,
+            to_date=end_date,
+            include_competitors=include_competitors,
+            include_macro=include_macro,
+            prioritize=True,
+            ticker_results=results[:top_n],
+        )
+    except RateLimitError:
+        logger.warning("Rate limit hit during basket enrichment news fetch")
+        return {}, None
+    except Exception as e:
+        logger.error(f"Error during basket enrichment news fetch: {e}")
+        return {}, None
+
+    # Build enriched results for holistic summary generation
+    enriched_results = [
+        r.model_copy(update={"news_cards": batch_news.get(r.ticker, [])})
+        for r in results
+    ]
+
+    temp_response = BasketAnalysisResponse(
+        tickers=[r.ticker for r in results],
+        period_start=start_date,
+        period_end=end_date,
+        results=enriched_results,
+        total_analyzed=len(enriched_results),
+        news_source="OpenAI Web Search",
+        basket_name=basket_name,
+    )
+    holistic_summary = generate_basket_holistic_summary(temp_response)
+
+    return batch_news, holistic_summary
 
 
 def analyze_basket(

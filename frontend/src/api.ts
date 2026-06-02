@@ -191,6 +191,16 @@ export interface PriceHistoryResponse {
   data: PriceDataPoint[];
 }
 
+export interface TickerNewsResponse {
+  ticker: string;
+  batch_news_cards: NewsCard[];
+}
+
+export interface BasketEnrichResponse {
+  ticker_news: Record<string, NewsCard[]>;
+  holistic_summary?: string;
+}
+
 export const stockApi = {
   getAnalysis: async (ticker: string, params?: {
     start_date?: string;
@@ -200,6 +210,7 @@ export const stockApi = {
     include_macro?: boolean;
     max_articles?: number;
     use_mock?: boolean;
+    include_news?: boolean;
   }) => {
     try {
       const response = await api.get<TickerAnalysis>(`/analysis/${ticker}`, { 
@@ -231,6 +242,59 @@ export const stockApi = {
   }) => {
     try {
       const response = await api.post<ChatResponse>(`/chat/${ticker}`, data);
+      return response.data;
+    } catch (error: unknown) {
+      if (error && typeof error === 'object' && 'response' in error) {
+        const err = error as { response?: { status?: number; data?: { detail?: string } } };
+        if (err.response?.status === 429) {
+          const message = err.response.data?.detail || 'Rate limit reached. Please wait a moment before trying again.';
+          const rateLimitInfo = parseRateLimitError(message);
+          const enhancedError = new Error(message, { cause: error }) as RateLimitError;
+          enhancedError.rateLimitInfo = rateLimitInfo;
+          throw enhancedError;
+        }
+      }
+      throw error;
+    }
+  },
+
+  getAnalysisNews: async (ticker: string, params?: {
+    start_date?: string;
+    end_date?: string;
+    min_movement_pct?: number;
+    include_competitors?: boolean;
+    include_macro?: boolean;
+    max_articles?: number;
+  }) => {
+    try {
+      const response = await api.get<TickerNewsResponse>(`/analysis/${ticker}/news`, { params });
+      return response.data;
+    } catch (error: unknown) {
+      if (error && typeof error === 'object' && 'response' in error) {
+        const err = error as { response?: { status?: number; data?: { detail?: string } } };
+        if (err.response?.status === 429) {
+          const message = err.response.data?.detail || 'Rate limit reached. Please wait a moment before trying again.';
+          const rateLimitInfo = parseRateLimitError(message);
+          const enhancedError = new Error(message, { cause: error }) as RateLimitError;
+          enhancedError.rateLimitInfo = rateLimitInfo;
+          throw enhancedError;
+        }
+      }
+      throw error;
+    }
+  },
+
+  enrichBasket: async (data: {
+    tickers: string[];
+    start_date: string;
+    end_date: string;
+    results: BasketTickerResult[];
+    include_competitors?: boolean;
+    include_macro?: boolean;
+    basket_name?: string;
+  }) => {
+    try {
+      const response = await api.post<BasketEnrichResponse>('/basket/enrich', data);
       return response.data;
     } catch (error: unknown) {
       if (error && typeof error === 'object' && 'response' in error) {

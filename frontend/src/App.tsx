@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import ReactDatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
 import {
@@ -23,6 +23,7 @@ import { format } from 'date-fns';
 import HeaderNavigation, { type Section } from './components/HeaderNavigation';
 import LoadingScreen from './components/LoadingScreen';
 import StockChart from './components/StockChart';
+import AILoadingBar from './components/AILoadingBar';
 import BasketAnalytics from './components/BasketAnalytics';
 import { DEFAULT_BASKETS } from './constants/defaultBaskets';
 
@@ -309,7 +310,7 @@ const BasketResultCard: React.FC<{ result: BasketTickerResult; rank: number }> =
               ))
             ) : (
               <div className="bg-slate-50 p-4 rounded-xl text-center border border-dashed border-slate-200">
-                <p className="text-sm text-slate-400">No news articles found for this stock.</p>
+                <p className="text-sm text-slate-400">Loading news...</p>
               </div>
             )}
           </div>
@@ -486,6 +487,8 @@ const App: React.FC = () => {
   const [analyticsExpanded, setAnalyticsExpanded] = useState(true);
   const [holisticSummary, setHolisticSummary] = useState<string | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
+  const [newsLoading, setNewsLoading] = useState(false);
+  const [basketAiLoading, setBasketAiLoading] = useState(false);
 
   // Price history data for charts
   const [priceHistory, setPriceHistory] = useState<PriceHistoryResponse | null>(null);
@@ -503,6 +506,9 @@ const App: React.FC = () => {
 
   // PDF download state
   const [downloadingPdf, setDownloadingPdf] = useState(false);
+
+  // Ref to track current ticker being fetched to prevent race conditions
+  const currentTickerRef = useRef<string | null>(null);
 
   // Memoize section click handler to avoid unnecessary re-renders
   const handleSectionClick = React.useCallback((sectionId: string) => {
@@ -588,97 +594,94 @@ const App: React.FC = () => {
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!ticker) return;
-    
+
+    const params: { start_date?: string; end_date?: string } = {};
+    if (startDate) params.start_date = format(startDate, 'yyyy-MM-dd');
+    if (endDate) params.end_date = format(endDate, 'yyyy-MM-dd');
+
+    // Track current ticker to prevent race conditions
+    const currentTicker = ticker.toUpperCase();
+    currentTickerRef.current = currentTicker;
+
+    // Reset all state
     setLoading(true);
     setError(null);
-    try {
-      const params: {
-        start_date?: string;
-        end_date?: string;
-      } = {};
-      if (startDate) {
-        params.start_date = format(startDate, 'yyyy-MM-dd');
-      }
-      if (endDate) {
-        params.end_date = format(endDate, 'yyyy-MM-dd');
-      }
-      const data = await stockApi.getAnalysis(ticker.toUpperCase(), {
-        ...params,
-        min_movement_pct: minMovementThreshold
-      });
-      setAnalysis(data);
-      setHolisticSummary(null); // Clear previous summary
-      setSummaryLoading(true); // Start loading summary
-      setPriceHistoryLoading(true); // Start loading price history
-      
-      // Auto-fetch holistic summary
-      try {
-        const summaryResponse = await stockApi.chat(ticker, {
-          message: 'Provide a 1-2 sentence summary of what drove this stock\'s movements over the entire time period. Keep it simple and readable. Do not offer follow-up actions or suggest what the user can do next.',
-          history: []
-        });
-        setHolisticSummary(summaryResponse.response);
-      } catch (err) {
-        // Log error and fail gracefully if summary fetch fails
-        console.error('Failed to fetch holistic summary:', err);
-        setHolisticSummary(null);
-      } finally {
-        setSummaryLoading(false); // Stop loading summary
-      }
+    setAnalysis(null);
+    setHolisticSummary(null);
+    setPriceHistory(null);
+    setNewsLoading(false);
 
-      // Fetch price history for charts
-      try {
-        const priceHistoryData = await stockApi.getPriceHistory(ticker.toUpperCase(), params);
-        setPriceHistory(priceHistoryData);
-      } catch (err) {
-        console.error('Failed to fetch price history:', err);
-        setPriceHistory(null);
-      } finally {
-        setPriceHistoryLoading(false);
-      }
+    // ── Phase 1: Fast price & movement data (no AI) ─────────────────────────
+    let phaseOneData;
+    try {
+      phaseOneData = await stockApi.getAnalysis(currentTicker, {
+        ...params,
+        min_movement_pct: minMovementThreshold,
+        include_news: false,
+      });
     } catch (err: unknown) {
+      setLoading(false);
       console.error('Analysis error:', err);
       if (err && typeof err === 'object' && 'rateLimitInfo' in err) {
-        // Enhanced rate limit error with structured info
-        const rateLimitErr = err as { rateLimitInfo?: { isRateLimit: boolean; limitType?: string; waitTime?: number; message: string } };
+        const rateLimitErr = err as { rateLimitInfo?: { isRateLimit: boolean; message: string } };
         if (rateLimitErr.rateLimitInfo?.isRateLimit) {
           setError(rateLimitErr.rateLimitInfo.message);
-        } else {
-          // Fall through to standard error handling
-          if (err && typeof err === 'object' && 'response' in err) {
-            const axiosError = err as { response?: { status?: number; data?: { detail?: string } } };
-            const errorDetail = axiosError.response?.data?.detail;
-            if (errorDetail) {
-              setError(errorDetail);
-            } else if (axiosError.response?.status === 429) {
-              setError('Rate limit reached. Please wait a moment before trying again.');
-            } else {
-              setError('Failed to fetch analysis. Please try again.');
-            }
-          } else if (err instanceof Error) {
-            setError(err.message || 'Failed to fetch analysis. Please try again.');
-          } else {
-            setError('Failed to fetch analysis. Please try again.');
-          }
+          return;
         }
-      } else if (err && typeof err === 'object' && 'response' in err) {
+      }
+      if (err && typeof err === 'object' && 'response' in err) {
         const axiosError = err as { response?: { status?: number; data?: { detail?: string } } };
         const errorDetail = axiosError.response?.data?.detail;
-        if (errorDetail) {
-          setError(errorDetail);
-        } else if (axiosError.response?.status === 429) {
-          setError('Rate limit reached. Please wait a moment before trying again.');
-        } else {
-          setError('Failed to fetch analysis. Please try again.');
-        }
-      } else if (err instanceof Error) {
-        setError(err.message || 'Failed to fetch analysis. Please try again.');
-      } else {
-        setError('Failed to fetch analysis. Please try again.');
+        if (errorDetail) { setError(errorDetail); return; }
+        if (axiosError.response?.status === 429) { setError('Rate limit reached. Please wait a moment before trying again.'); return; }
       }
-      setAnalysis(null);
-    } finally {
-      setLoading(false);
+      setError(err instanceof Error ? err.message || 'Failed to fetch analysis. Please try again.' : 'Failed to fetch analysis. Please try again.');
+      return;
+    }
+
+    // Show price/movement data immediately
+    setAnalysis(phaseOneData);
+    setLoading(false);
+
+    // ── Phase 2: Background AI calls (news + summary + price history) ────────
+    setSummaryLoading(true);
+    setPriceHistoryLoading(true);
+    setNewsLoading(true);
+
+    const [newsResult, summaryResult, priceHistoryResult] = await Promise.allSettled([
+      stockApi.getAnalysisNews(currentTicker, {
+        ...params,
+        min_movement_pct: minMovementThreshold,
+      }),
+      stockApi.chat(currentTicker, {
+        message: 'Provide a 1-2 sentence summary of what drove this stock\'s movements over the entire time period. Keep it simple and readable. Do not offer follow-up actions or suggest what the user can do next.',
+        history: [],
+      }),
+      stockApi.getPriceHistory(currentTicker, params),
+    ]);
+
+    // Only update state if this is still the current ticker (prevent race condition)
+    if (currentTickerRef.current === currentTicker) {
+      if (newsResult.status === 'fulfilled') {
+        setAnalysis(prev => prev ? { ...prev, batch_news_cards: newsResult.value.batch_news_cards } : prev);
+      } else {
+        console.error('Failed to fetch news:', newsResult.reason);
+      }
+      setNewsLoading(false);
+
+      if (summaryResult.status === 'fulfilled') {
+        setHolisticSummary(summaryResult.value.response);
+      } else {
+        console.error('Failed to fetch holistic summary:', summaryResult.reason);
+      }
+      setSummaryLoading(false);
+
+      if (priceHistoryResult.status === 'fulfilled') {
+        setPriceHistory(priceHistoryResult.value);
+      } else {
+        console.error('Failed to fetch price history:', priceHistoryResult.reason);
+      }
+      setPriceHistoryLoading(false);
     }
   };
 
@@ -717,77 +720,92 @@ const App: React.FC = () => {
 
   const handleBasketAnalysis = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    // Parse tickers from comma-separated string
+
     const tickerList = basketTickers.split(',')
       .map(t => t.trim().toUpperCase())
       .filter(t => t.length > 0);
-    
+
     if (tickerList.length === 0) {
       setBasketError('Please enter at least one valid ticker');
       return;
     }
-    
+
     const resolvedEnd = basketEndDate || new Date();
     const resolvedStart = basketStartDate || new Date(new Date().setMonth(resolvedEnd.getMonth() - 3));
-    
+    const startDateStr = format(resolvedStart, 'yyyy-MM-dd');
+    const endDateStr = format(resolvedEnd, 'yyyy-MM-dd');
+    const basketName = selectedBasket ? DEFAULT_BASKETS.find(b => b.id === selectedBasket)?.name : undefined;
+
+    // Reset state
     setBasketLoading(true);
     setBasketError(null);
+    setBasketAnalysis(null);
+    setBasketAiLoading(false);
+
+    // ── Phase 1: Fast price & performance data (no AI) ──────────────────────
+    let phaseOneData;
     try {
-      const data = await stockApi.analyzeBasket({
+      phaseOneData = await stockApi.analyzeBasket({
         tickers: tickerList,
-        start_date: format(resolvedStart, 'yyyy-MM-dd'),
-        end_date: format(resolvedEnd, 'yyyy-MM-dd'),
-        include_news: true,
+        start_date: startDateStr,
+        end_date: endDateStr,
+        include_news: false,
         include_competitors: false,
         include_macro: false,
         basket_id: selectedBasket || undefined,
-        basket_name: selectedBasket ? DEFAULT_BASKETS.find(b => b.id === selectedBasket)?.name : undefined,
+        basket_name: basketName,
       });
-      setBasketAnalysis(data);
     } catch (err: unknown) {
+      setBasketLoading(false);
       console.error('Basket analysis error:', err);
       if (err && typeof err === 'object' && 'rateLimitInfo' in err) {
-        // Enhanced rate limit error with structured info
-        const rateLimitErr = err as { rateLimitInfo?: { isRateLimit: boolean; limitType?: string; waitTime?: number; message: string } };
-        if (rateLimitErr.rateLimitInfo?.isRateLimit) {
-          setBasketError(rateLimitErr.rateLimitInfo.message);
-        } else {
-          // Fall through to standard error handling
-          if (err && typeof err === 'object' && 'response' in err) {
-            const axiosError = err as { response?: { status?: number; data?: { detail?: string } } };
-            const errorDetail = axiosError.response?.data?.detail;
-            if (errorDetail) {
-              setBasketError(errorDetail);
-            } else if (axiosError.response?.status === 429) {
-              setBasketError('Rate limit reached. Please wait a moment before trying again.');
-            } else {
-              setBasketError('Failed to analyze basket. Please try again.');
-            }
-          } else if (err instanceof Error) {
-            setBasketError(err.message || 'Failed to analyze basket. Please try again.');
-          } else {
-            setBasketError('Failed to analyze basket. Please try again.');
-          }
-        }
-      } else if (err && typeof err === 'object' && 'response' in err) {
+        const rateLimitErr = err as { rateLimitInfo?: { isRateLimit: boolean; message: string } };
+        if (rateLimitErr.rateLimitInfo?.isRateLimit) { setBasketError(rateLimitErr.rateLimitInfo.message); return; }
+      }
+      if (err && typeof err === 'object' && 'response' in err) {
         const axiosError = err as { response?: { status?: number; data?: { detail?: string } } };
         const errorDetail = axiosError.response?.data?.detail;
-        if (errorDetail) {
-          setBasketError(errorDetail);
-        } else if (axiosError.response?.status === 429) {
-          setBasketError('Rate limit reached. Please wait a moment before trying again.');
-        } else {
-          setBasketError('Failed to analyze basket. Please try again.');
-        }
-      } else if (err instanceof Error) {
-        setBasketError(err.message || 'Failed to analyze basket. Please try again.');
-      } else {
-        setBasketError('Failed to analyze basket. Please try again.');
+        if (errorDetail) { setBasketError(errorDetail); return; }
+        if (axiosError.response?.status === 429) { setBasketError('Rate limit reached. Please wait a moment before trying again.'); return; }
       }
-      setBasketAnalysis(null);
+      setBasketError(err instanceof Error ? err.message || 'Failed to analyze basket. Please try again.' : 'Failed to analyze basket. Please try again.');
+      return;
+    }
+
+    // Show performance / analytics immediately
+    setBasketAnalysis(phaseOneData);
+    setBasketLoading(false);
+
+    // ── Phase 2: Background AI enrichment (news + holistic summary) ──────────
+    setBasketAiLoading(true);
+    try {
+      const enrichData = await stockApi.enrichBasket({
+        tickers: tickerList,
+        start_date: startDateStr,
+        end_date: endDateStr,
+        results: phaseOneData.results,
+        include_competitors: false,
+        include_macro: false,
+        basket_name: basketName,
+      });
+
+      setBasketAnalysis(prev => {
+        if (!prev) return prev;
+        const updatedResults = prev.results.map(r => ({
+          ...r,
+          news_cards: enrichData.ticker_news[r.ticker] || r.news_cards,
+        }));
+        return {
+          ...prev,
+          results: updatedResults,
+          holistic_summary: enrichData.holistic_summary,
+          news_source: 'OpenAI Web Search',
+        };
+      });
+    } catch (err) {
+      console.error('Basket enrichment error (non-fatal):', err);
     } finally {
-      setBasketLoading(false);
+      setBasketAiLoading(false);
     }
   };
 
@@ -1575,6 +1593,15 @@ const App: React.FC = () => {
           </>
         )}
       </main>
+
+      {/* AI Loading Bar at bottom */}
+      <AILoadingBar
+        items={[
+          ...(newsLoading ? [{ key: 'news', message: 'Loading news...' }] : []),
+          ...(summaryLoading ? [{ key: 'summary', message: 'Generating summary...' }] : []),
+          ...(basketAiLoading ? [{ key: 'basket-news', message: 'Loading basket news...' }, { key: 'basket-summary', message: 'Generating basket summary...' }] : []),
+        ]}
+      />
     </div>
   );
 };

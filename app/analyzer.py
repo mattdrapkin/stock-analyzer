@@ -85,6 +85,7 @@ def build_analysis(
     include_macro: bool = False,
     max_articles_per_category: int = 5,
     cache_ttl: int = 1800,
+    include_news: bool = True,
 ) -> TickerAnalysis:
     """
     Fetch price history, detect major movements, attach relevant news, and
@@ -96,7 +97,7 @@ def build_analysis(
     cache_key = (
         f"{ticker.upper()}|{start_date}|{end_date}|{min_movement_pct}"
         f"|{include_competitors}|{include_macro}|{max_articles_per_category}"
-        "|v2"  # Version for batch_news_cards format
+        f"|news={include_news}|v2"
     )
     cached = _cache_get(cache_key, cache_ttl)
     if cached is not None:
@@ -115,12 +116,15 @@ def build_analysis(
     df = fetch_price_history(ticker, start_date, end_date)
     raw_movements = detect_major_movements(df, min_pct=min_movement_pct)
 
-    # 3. News — use OpenAI web search if available, otherwise mock data
-    if has_openai_key():
+    # 3. News — use OpenAI web search if available and requested, otherwise skip/mock
+    if include_news and has_openai_key():
         news_source = "OpenAI Web Search"
         use_web_search = True
-    else:
+    elif include_news:
         news_source = "Mock News Data"
+        use_web_search = False
+    else:
+        news_source = "None"
         use_web_search = False
 
     # 4. Build StockMovement objects with attached news
@@ -183,8 +187,8 @@ def build_analysis(
                         news_summaries=[],  # Empty per movement, use batch summary at analysis level
                     )
                 )
-    else:
-        # Use mock news data for testing
+    elif include_news:
+        # Use mock news data for testing (no OpenAI key available)
         for raw in raw_movements:
             mv_date: date = raw["date"]
             raw_articles = fetch_mock_news_for_movement(
@@ -213,11 +217,31 @@ def build_analysis(
                     news_summaries=[],
                 )
             )
+    else:
+        # No news requested — build movements without any news
+        for raw in raw_movements:
+            movements.append(
+                StockMovement(
+                    date=raw["date"],
+                    open=raw["open"],
+                    close=raw["close"],
+                    high=raw["high"],
+                    low=raw["low"],
+                    volume=raw["volume"],
+                    change_pct=raw["change_pct"],
+                    direction=raw["direction"],
+                    news=[],
+                    news_summaries=[],
+                )
+            )
 
     up = sum(1 for m in movements if m.direction == "up")
-    news_note: Optional[str] = (
-        None if use_web_search else "Using mock news data for testing purposes."
-    )
+    if use_web_search:
+        news_note: Optional[str] = None
+    elif include_news:
+        news_note = "Using mock news data for testing purposes."
+    else:
+        news_note = None
 
     result = TickerAnalysis(
         ticker=ticker,

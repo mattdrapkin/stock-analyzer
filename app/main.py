@@ -25,16 +25,19 @@ from fastapi.responses import JSONResponse, Response
 from .models import (
     BasketAnalysisRequest,
     BasketAnalysisResponse,
+    BasketEnrichRequest,
+    BasketEnrichResponse,
     ChatRequest,
     ChatResponse,
     FunFactsRequest,
     FunFactsResponse,
     HealthResponse,
     TickerAnalysis,
+    TickerNewsResponse,
     PriceHistoryResponse,
 )
 from .analyzer import build_analysis
-from .basket_analyzer import analyze_basket
+from .basket_analyzer import analyze_basket, enrich_basket
 from .chat import chat_with_ticker
 from .fun_facts import generate_fun_facts
 from .openai_client import has_openai_key
@@ -258,6 +261,10 @@ def get_analysis(
         default=False,
         description="Use mock data for demonstration (bypasses yfinance).",
     ),
+    include_news: bool = Query(
+        default=True,
+        description="Include AI-powered news fetch. Set to false for a faster initial response.",
+    ),
 ) -> TickerAnalysis:
     """
     Returns all major stock price movements for `ticker` within the requested
@@ -292,6 +299,7 @@ def get_analysis(
             include_macro=include_macro,
             max_articles_per_category=max_articles,
             cache_ttl=CACHE_TTL,
+            include_news=include_news,
         )
     except RateLimitError as e:
         logger.warning(f"Rate limit error in analysis endpoint: {e}")
@@ -300,6 +308,71 @@ def get_analysis(
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.exception(f"Unexpected error building analysis for {ticker}")
+        raise HTTPException(status_code=500, detail=f"Internal error: {e}")
+
+
+@app.get(
+    "/api/v1/analysis/{ticker}/news",
+    response_model=TickerNewsResponse,
+    tags=["Analysis"],
+    summary="Fetch AI-powered news for a ticker (background call)",
+)
+def get_ticker_news(
+    ticker: str,
+    start_date: Optional[date] = Query(
+        default=None,
+        description="Start date (YYYY-MM-DD). Defaults to 90 days ago.",
+    ),
+    end_date: Optional[date] = Query(
+        default=None,
+        description="End date (YYYY-MM-DD). Defaults to today.",
+    ),
+    min_movement_pct: float = Query(
+        default=float(os.getenv("MIN_MOVEMENT_PCT", "2.0")),
+        ge=0.1,
+        le=50.0,
+    ),
+    include_competitors: bool = Query(default=False),
+    include_macro: bool = Query(default=False),
+    max_articles: int = Query(default=5, ge=1, le=20),
+) -> TickerNewsResponse:
+    """
+    Fetch only the AI-powered news cards for a ticker.
+
+    Intended to be called in the background after the fast analysis data has
+    already been returned from the main `/analysis/{ticker}` endpoint.
+    """
+    resolved_end = end_date or date.today()
+    resolved_start = start_date or (resolved_end - timedelta(days=90))
+
+    if resolved_start > resolved_end:
+        raise HTTPException(status_code=422, detail="start_date must be before end_date.")
+    if (resolved_end - resolved_start).days > 730:
+        raise HTTPException(status_code=422, detail="Date range cannot exceed 2 years.")
+
+    try:
+        analysis = build_analysis(
+            ticker=ticker.upper(),
+            start_date=resolved_start,
+            end_date=resolved_end,
+            min_movement_pct=min_movement_pct,
+            include_competitors=include_competitors,
+            include_macro=include_macro,
+            max_articles_per_category=max_articles,
+            cache_ttl=CACHE_TTL,
+            include_news=True,
+        )
+        return TickerNewsResponse(
+            ticker=ticker.upper(),
+            batch_news_cards=analysis.batch_news_cards,
+        )
+    except RateLimitError as e:
+        logger.warning(f"Rate limit error in ticker news endpoint: {e}")
+        raise HTTPException(status_code=429, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.exception(f"Unexpected error fetching news for {ticker}")
         raise HTTPException(status_code=500, detail=f"Internal error: {e}")
 
 
@@ -418,7 +491,7 @@ def analyze_basket_endpoint(
     body: BasketAnalysisRequest,
     include_news: bool = Query(
         default=False,
-        description="Include news articles for each stock in the basket.",
+        description="Include AI-powered news articles for each stock. Set to false for a faster response.",
     ),
     include_competitors: bool = Query(
         default=False,
@@ -483,6 +556,46 @@ def analyze_basket_endpoint(
         raise HTTPException(status_code=429, detail=str(e))
     except Exception as e:
         logger.exception(f"Unexpected error in basket analysis")
+        raise HTTPException(status_code=500, detail=f"Internal error: {e}")
+
+
+@app.post(
+    "/api/v1/basket/enrich",
+    response_model=BasketEnrichResponse,
+    tags=["Basket"],
+    summary="AI-powered news enrichment for already-computed basket results",
+)
+def enrich_basket_endpoint(
+    body: BasketEnrichRequest,
+) -> BasketEnrichResponse:
+    """
+    Fetch AI-powered news and generate a holistic summary for an already-computed basket.
+
+    Call this in the background after `/api/v1/basket` (without news) has returned
+    to progressively enrich the UI with news and AI summaries without blocking the
+    initial fast render.
+    """
+    if not body.results:
+        raise HTTPException(status_code=422, detail="At least one result is required.")
+
+    try:
+        ticker_news, holistic_summary = enrich_basket(
+            results=body.results,
+            start_date=body.start_date,
+            end_date=body.end_date,
+            include_competitors=body.include_competitors,
+            include_macro=body.include_macro,
+            basket_name=body.basket_name,
+        )
+        return BasketEnrichResponse(
+            ticker_news=ticker_news,
+            holistic_summary=holistic_summary,
+        )
+    except RateLimitError as e:
+        logger.warning(f"Rate limit error in basket enrichment: {e}")
+        raise HTTPException(status_code=429, detail=str(e))
+    except Exception as e:
+        logger.exception("Unexpected error in basket enrichment")
         raise HTTPException(status_code=500, detail=f"Internal error: {e}")
 
 
