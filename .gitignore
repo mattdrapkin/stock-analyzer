@@ -146,8 +146,17 @@ Thumbs.db
 
 # Project specific
 *.csv
-*.json
 data/
 logs/
 *.db
 *.sqlite
+
+# Allow config files
+!package.json
+!package-lock.json
+!vercel.json
+!tsconfig*.json
+!vite.config.ts
+!tailwind.config.js
+!postcss.config.js
+!eslint.config.js
