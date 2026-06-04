@@ -113,7 +113,9 @@ const BasketAnalytics: React.FC<BasketAnalyticsProps> = ({ results }) => {
       acc[industry] = { industry, count: 0, totalChange: 0, tickers: [] };
     }
     acc[industry].count += 1;
-    acc[industry].totalChange += result.total_change_pct;
+    if (result.total_change_pct !== null) {
+      acc[industry].totalChange += result.total_change_pct;
+    }
     acc[industry].tickers.push(result.ticker);
     return acc;
   }, {});
@@ -131,7 +133,7 @@ const BasketAnalytics: React.FC<BasketAnalyticsProps> = ({ results }) => {
   // Performance distribution
   const performanceData = results.map((r) => ({
     ticker: r.ticker,
-    change: r.total_change_pct,
+    change: r.total_change_pct ?? 0,
     direction: r.direction,
   }));
 
@@ -255,13 +257,16 @@ const BasketAnalytics: React.FC<BasketAnalyticsProps> = ({ results }) => {
         <div className="bg-indigo-50 p-4 rounded-xl border border-indigo-100">
           <p className="text-indigo-600 text-xs font-bold uppercase mb-1">Avg Change</p>
           <p className="text-2xl font-bold text-indigo-700">
-            {(results.reduce((sum, r) => sum + r.total_change_pct, 0) / results.length).toFixed(2)}%
+            {(results.reduce((sum, r) => sum + (r.total_change_pct ?? 0), 0) / results.length).toFixed(2)}%
           </p>
         </div>
         <div className="bg-purple-50 p-4 rounded-xl border border-purple-100">
           <p className="text-purple-600 text-xs font-bold uppercase mb-1">Best Performer</p>
           <p className="text-lg font-bold text-purple-700">
-            {results.reduce((best, r) => (r.total_change_pct > best.total_change_pct ? r : best)).ticker}
+            {results
+              .filter((r) => r.total_change_pct !== null)
+              .reduce((best, r) => (r.total_change_pct! > best.total_change_pct! ? r : best))
+              .ticker}
           </p>
         </div>
       </div>
